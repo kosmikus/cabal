@@ -14,6 +14,10 @@ import Distribution.Client.Dependency.Modular.Tree
 -- to info.
 type Index = Map PN (Map I PInfo)
 
+-- | A type synonym for a function that computes the reverse dependency closure
+-- of a set of installed package ids.
+type InstRevDeps = [PId] -> [PI PN]
+
 -- | Info associated with a package instance.
 -- Currently, dependencies, flags, encapsulations and failure reasons.
 -- Packages that have a failure reason recorded for them are disabled

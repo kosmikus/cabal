@@ -18,7 +18,7 @@ import Distribution.Client.Dependency.Modular.Dependency
 import Distribution.Client.Dependency.Modular.ConfiguredConversion
          ( convCP )
 import Distribution.Client.Dependency.Modular.IndexConversion
-         ( convPIs )
+         ( convPIs, createInstRevDeps )
 import Distribution.Client.Dependency.Modular.Log
          ( logToProgress )
 import Distribution.Client.Dependency.Modular.Package
@@ -38,12 +38,14 @@ modularResolver :: SolverConfig -> DependencyResolver
 modularResolver sc (Platform arch os) cid iidx sidx pprefs pcs pns =
   fmap (uncurry postprocess)      $ -- convert install plan
   logToProgress (maxBackjumps sc) $ -- convert log format into progress format
-  solve sc idx pprefs gcs pns
+  solve sc idx iRevDeps pprefs gcs pns
     where
       -- Indices have to be converted into solver-specific uniform index.
-      idx    = convPIs os arch cid (shadowPkgs sc) iidx sidx
+      idx      = convPIs os arch cid (shadowPkgs sc) iidx sidx
+      -- Computation of revdeps for installed packages
+      iRevDeps = createInstRevDeps iidx
       -- Constraints have to be converted into a finite map indexed by PN.
-      gcs    = M.fromListWith (++) (map (\ pc -> (pcName pc, [pc])) pcs)
+      gcs      = M.fromListWith (++) (map (\ pc -> (pcName pc, [pc])) pcs)
 
       -- Results have to be converted into an install plan.
       postprocess :: Assignment -> RevDepMap -> [PlanPackage]

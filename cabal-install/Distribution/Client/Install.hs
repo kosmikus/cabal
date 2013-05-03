@@ -315,7 +315,7 @@ planPackages comp platform solver configFlags configExFlags installFlags
           [ PackageConstraintStanzas (pkgSpecifierTarget pkgSpecifier) stanzas
           | pkgSpecifier <- pkgSpecifiers ]
 
-      . (if reinstall then reinstallTargets else id)
+      . (if reinstall then reinstallTargets solver else id)
 
       $ standardInstallPolicy installedPkgIndex sourcePkgDb pkgSpecifiers
 

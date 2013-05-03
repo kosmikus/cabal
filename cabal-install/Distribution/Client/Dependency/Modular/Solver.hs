@@ -26,11 +26,12 @@ data SolverConfig = SolverConfig {
 
 solve :: SolverConfig ->   -- solver parameters
          Index ->          -- all available packages as an index
+         InstRevDeps ->    -- reverse dependencies of installed packages
          (PN -> PackagePreferences) -> -- preferences
          Map PN [PackageConstraint] -> -- global constraints
          [PN] ->                       -- global goals
          Log Message (Assignment, RevDepMap)
-solve sc idx userPrefs userConstraints userGoals =
+solve sc idx iRevDeps userPrefs userConstraints userGoals =
   explorePhase     $
   heuristicsPhase  $
   preferencesPhase $
@@ -51,4 +52,4 @@ solve sc idx userPrefs userConstraints userGoals =
                        -- packages that can never be "upgraded":
                        P.requireInstalled (`elem` [PackageName "base",
                                                    PackageName "ghc-prim"])
-    buildPhase       = buildTree idx (independentGoals sc) userGoals
+    buildPhase       = buildTree idx iRevDeps (independentGoals sc) userGoals

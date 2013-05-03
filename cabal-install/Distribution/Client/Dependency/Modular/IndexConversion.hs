@@ -21,6 +21,12 @@ import Distribution.Client.Dependency.Modular.Package
 import Distribution.Client.Dependency.Modular.Tree
 import Distribution.Client.Dependency.Modular.Version
 
+-- | Given an index of installed packages, compute the reverse dependency closure
+-- of a given set of installed package ids.
+createInstRevDeps :: SI.PackageIndex -> InstRevDeps
+createInstRevDeps idx is = L.map (\ ipi -> PI (pkgName (sourcePackageId ipi)) (I (pkgVersion (sourcePackageId ipi)) (Inst (installedPackageId ipi))))
+                                 (SI.reverseDependencyClosure idx is)
+
 -- | Convert both the installed package index and the source package
 -- index into one uniform solver index.
 --

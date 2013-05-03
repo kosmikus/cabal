@@ -19,6 +19,7 @@ import Distribution.Client.Types
 import Distribution.Client.Targets
 import Distribution.Client.FetchUtils hiding (fetchPackage)
 import Distribution.Client.Dependency
+import Distribution.Client.Dependency.Types
 import Distribution.Client.IndexUtils as IndexUtils
          ( getSourcePackages, getInstalledPackages )
 import qualified Distribution.Client.InstallPlan as InstallPlan
@@ -129,7 +130,7 @@ planPackages verbosity comp platform fetchFlags
                        resolveDependencies
                          platform (compilerId comp)
                          solver
-                         resolverParams
+                         (resolverParams solver)
 
       -- The packages we want to fetch are those packages the 'InstallPlan'
       -- that are in the 'InstallPlan.Configured' state.
@@ -140,10 +141,10 @@ planPackages verbosity comp platform fetchFlags
 
   | otherwise =
       either (die . unlines . map show) return $
-        resolveWithoutDependencies resolverParams
+        resolveWithoutDependencies (resolverParams TopDown)
 
   where
-    resolverParams =
+    resolverParams solver =
 
         setMaxBackjumps (if maxBackjumps < 0 then Nothing
                                              else Just maxBackjumps)
@@ -158,7 +159,7 @@ planPackages verbosity comp platform fetchFlags
         -- resolver will decide that they need fetching, even if they're
         -- already installed. Since we want to get the source packages of
         -- things we might have installed (but not have the sources for).
-      . reinstallTargets
+      . reinstallTargets solver
 
       $ standardInstallPolicy installedPkgIndex sourcePkgDb pkgSpecifiers
 

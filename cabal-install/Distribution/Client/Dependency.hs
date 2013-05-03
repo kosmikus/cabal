@@ -281,9 +281,17 @@ upgradeDependencies :: DepResolverParams -> DepResolverParams
 upgradeDependencies = setPreferenceDefault PreferAllLatest
 
 
-reinstallTargets :: DepResolverParams -> DepResolverParams
-reinstallTargets params =
-    hideInstalledPackagesAllVersions (depResolverTargets params) params
+-- | Add constraints that requires user-specified targets to be reinstalled.
+--
+-- For the old (topdown) solver, we actually remove installed instances
+-- of such packages from the index. For the new (modular) solver, we instead
+-- add constraints that a source (i.e., non-installed) instance of such
+-- packages should be chosen. If we edit the index for the new solver, it
+-- will no longer be able to properly detect reinstalls, and reverse-dependency
+-- tracking will be broken as a consequence.
+reinstallTargets :: Solver -> DepResolverParams -> DepResolverParams
+reinstallTargets Modular params = addConstraints [PackageConstraintSource n | n <- depResolverTargets params] params
+reinstallTargets _       params = hideInstalledPackagesAllVersions (depResolverTargets params) params
 
 
 standardInstallPolicy :: InstalledPackageIndex.PackageIndex

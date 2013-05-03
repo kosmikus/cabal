@@ -19,6 +19,7 @@ import Control.Monad.Reader hiding (sequence, mapM)
 import Data.List as L
 import Data.Map as M
 import Prelude hiding (sequence, mapM)
+import Debug.Trace
 
 import Distribution.Client.Dependency.Modular.Dependency
 import Distribution.Client.Dependency.Modular.Flag
@@ -26,14 +27,16 @@ import Distribution.Client.Dependency.Modular.Index
 import Distribution.Client.Dependency.Modular.Package
 import Distribution.Client.Dependency.Modular.PSQ as P
 import Distribution.Client.Dependency.Modular.Tree
+import Distribution.Client.Dependency.Modular.Version
 
 -- | The state needed during the build phase of the search tree.
 data BuildState = BS {
-  index :: Index,           -- ^ information about packages and their dependencies
-  scope :: Scope,           -- ^ information about encapsulations
-  rdeps :: RevDepMap,       -- ^ set of all package goals, completed and open, with reverse dependencies
-  open  :: PSQ OpenGoal (), -- ^ set of still open goals (flag and package goals)
-  next  :: BuildType        -- ^ kind of node to generate next
+  index  :: Index,           -- ^ information about packages and their dependencies
+  irdeps :: InstRevDeps,     -- ^ information about reverse dependencies of installed packages
+  scope  :: Scope,           -- ^ information about encapsulations
+  rdeps  :: RevDepMap,       -- ^ set of all package goals, completed and open, with reverse dependencies
+  open   :: PSQ OpenGoal (), -- ^ set of still open goals (flag and package goals)
+  next   :: BuildType        -- ^ kind of node to generate next
 }
 
 -- | Extend the set of open goals with the new goals listed.
@@ -54,6 +57,18 @@ extendOpen qpn' gs s@(BS { rdeps = gs', open = o' }) = go gs' o' gs
       | otherwise                                         = go (M.insert qpn [qpn']  g) (cons ng () o) ngs
                                        -- code above is correct; insert/adjust have different arg order
 
+extendOpen' :: QPN -> [Dep QPN] -> BuildState -> BuildState
+extendOpen' qpn' rds s@(BS { rdeps = gs', open = o' }) = go gs' o' rds
+  where
+    go :: RevDepMap -> PSQ OpenGoal () -> [Dep QPN] -> BuildState
+    go g o []                                               = s { rdeps = g, open = o }
+    go g o (ng@(Dep qpn _) : ngs)
+      | qpn == qpn'                                         = go                  g              o  ngs
+                                       -- we ignore self-dependencies at this point; TODO: more care may be needed
+      | qpn `M.member` g                                    = go                  g              o  ngs
+      | otherwise                                           = go (M.insert qpn [] g) (cons (OpenGoal (Simple ng) []) () o) ngs
+                                       -- code above is correct; insert/adjust have different arg order
+
 -- | Update the current scope by taking into account the encapsulations that
 -- are defined for the current package.
 establishScope :: QPN -> Encaps -> BuildState -> BuildState
@@ -64,16 +79,17 @@ establishScope (Q pp pn) ecs s =
 
 -- | Given the current scope, qualify all the package names in the given set of
 -- dependencies and then extend the set of open goals accordingly.
-scopedExtendOpen :: QPN -> I -> QGoalReasonChain -> FlaggedDeps PN -> FlagInfo ->
+scopedExtendOpen :: QPN -> I -> QGoalReasonChain -> FlaggedDeps PN -> FlagInfo -> [PI PN] ->
                     BuildState -> BuildState
-scopedExtendOpen qpn i gr fdeps fdefs s = extendOpen qpn gs s
+scopedExtendOpen qpn i gr fdeps fdefs rdeps s = trace (show qrdeps) (extendOpen' qpn qrdeps (extendOpen qpn gs s))
   where
     sc     = scope s
     qfdeps = L.map (fmap (qualify sc)) fdeps -- qualify all the package names
     qfdefs = L.map (\ (fn, b) -> Flagged (FN (PI qpn i) fn) b [] []) $ M.toList fdefs
+    qrdeps = L.map (\ (PI pn _) -> Dep (qualify sc pn) (Constrained [])) rdeps
     gs     = L.map (flip OpenGoal gr) (qfdeps ++ qfdefs)
 
-data BuildType = Goals | OneGoal OpenGoal | Instance QPN I PInfo QGoalReasonChain
+data BuildType = Goals | OneGoal OpenGoal | Instance QPN I PInfo QGoalReasonChain (Map Ver [PI PN])
 
 build :: BuildState -> Tree (QGoalReasonChain, Scope)
 build = ana go
@@ -93,13 +109,16 @@ build = ana go
     --
     -- For a package, we look up the instances available in the global info,
     -- and then handle each instance in turn.
-    go bs@(BS { index = idx, scope = sc, next = OneGoal (OpenGoal (Simple (Dep qpn@(Q _ pn) _)) gr) }) =
+    go bs@(BS { index = idx, scope = sc, next = OneGoal (OpenGoal (Simple (Dep qpn@(Q _ pn) _)) gr), irdeps = ird }) =
       case M.lookup pn idx of
         Nothing  -> FailF (toConflictSet (Goal (P qpn) gr)) (BuildFailureNotInIndex pn)
-        Just pis -> PChoiceF qpn (gr, sc) (P.fromList (L.map (\ (i, info) ->
-                                                           (i, bs { next = Instance qpn i info gr }))
-                                                         (M.toList pis)))
-          -- TODO: data structure conversion is rather ugly here
+        Just pis -> PChoiceF qpn (gr, sc) (P.fromList cs)
+            -- TODO: data structure conversion is rather ugly here
+          where
+            pis'      = M.toList pis
+            cs        = L.map (\ (i, info) -> (i, bs { next = Instance qpn i info gr installed })) pis'
+            -- We also compute info about installed package ids, so that we can discover reinstalls.
+            installed = M.fromList [ (v, rd) | (I v (Inst ipid), _) <- pis', let rd = ird [ipid] ]
 
     -- For a flag, we create only two subtrees, and we create them in the order
     -- that is indicated by the flag default.
@@ -125,16 +144,19 @@ build = ana go
     -- and furthermore we update the set of goals.
     --
     -- TODO: We could inline this above.
-    go bs@(BS { next = Instance qpn i (PInfo fdeps fdefs ecs _) gr }) =
+    go bs@(BS { next = Instance qpn i (PInfo fdeps fdefs ecs _) gr iRevDeps }) =
       go ((establishScope qpn ecs
-             (scopedExtendOpen qpn i (PDependency (PI qpn i) : gr) fdeps fdefs bs))
+             (scopedExtendOpen qpn i (PDependency (PI qpn i) : gr) fdeps fdefs (revdeps i) bs))
              { next = Goals })
+      where
+        revdeps (I v InRepo) = let r = M.findWithDefault [] v iRevDeps in trace (show (i, iRevDeps, r)) r
+        revdeps _            = []
 
 -- | Interface to the tree builder. Just takes an index and a list of package names,
 -- and computes the initial state and then the tree from there.
-buildTree :: Index -> Bool -> [PN] -> Tree (QGoalReasonChain, Scope)
-buildTree idx ind igs =
-    build (BS idx sc
+buildTree :: Index -> InstRevDeps -> Bool -> [PN] -> Tree (QGoalReasonChain, Scope)
+buildTree idx iRevDeps ind igs =
+    build (BS idx iRevDeps sc
                   (M.fromList (L.map (\ qpn -> (qpn, []))                                                     qpns))
                   (P.fromList (L.map (\ qpn -> (OpenGoal (Simple (Dep qpn (Constrained []))) [UserGoal], ())) qpns))
                   Goals)
