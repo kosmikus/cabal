@@ -19,7 +19,6 @@ import Control.Monad.Reader hiding (sequence, mapM)
 import Data.List as L
 import Data.Map as M
 import Prelude hiding (sequence, mapM)
-import Debug.Trace
 
 import Distribution.Client.Dependency.Modular.Dependency
 import Distribution.Client.Dependency.Modular.Flag
@@ -88,12 +87,12 @@ establishScope (Q pp pn) ecs s =
 -- dependencies and then extend the set of open goals accordingly.
 scopedExtendOpen :: QPN -> I -> PI QPN -> QGoalReasonChain -> FlaggedDeps PN -> FlagInfo -> [PI PN] ->
                     BuildState -> BuildState
-scopedExtendOpen qpn i grqpi gr fdeps fdefs rdeps s = trace (show qrdeps) (extendOpen' qpn rgs (extendOpen qpn gs s))
+scopedExtendOpen qpn i grqpi gr fdeps fdefs rpdeps s = {- trace (show qrdeps) $ -} extendOpen' qpn rgs (extendOpen qpn gs s)
   where
     sc     = scope s
     qfdeps = L.map (fmap (qualify sc)) fdeps -- qualify all the package names
     qfdefs = L.map (\ (fn, b) -> Flagged (FN (PI qpn i) fn) b [] []) $ M.toList fdefs
-    qrdeps = L.map (\ (PI pn _) -> Dep (qualify sc pn) (Constrained [])) rdeps
+    qrdeps = L.map (\ (PI pn _) -> Dep (qualify sc pn) (Constrained [])) rpdeps
     rgs    = L.map (flip OpenGoal (RDependency grqpi : gr) . Simple)  qrdeps
     gs     = L.map (flip OpenGoal (PDependency grqpi : gr)         ) (qfdeps ++ qfdefs)
 
@@ -157,7 +156,7 @@ build = ana go
              (scopedExtendOpen qpn i (PI qpn i) gr fdeps fdefs (revdeps i) bs))
              { next = Goals })
       where
-        revdeps (I v InRepo) = let r = M.findWithDefault [] v iRevDeps in trace (show (i, iRevDeps, r)) r
+        revdeps (I v InRepo) = let r = M.findWithDefault [] v iRevDeps in {- trace (show (i, iRevDeps, r)) -} r
         revdeps _            = []
 
 -- | Interface to the tree builder. Just takes an index and a list of package names,
