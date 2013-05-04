@@ -155,13 +155,15 @@ data OpenGoal = OpenGoal (FlaggedDep QPN) QGoalReasonChain
 -- | Reasons why a goal can be added to a goal set.
 data GoalReason qpn =
     UserGoal
-  | PDependency (PI qpn)
-  | FDependency (FN qpn) Bool
-  | SDependency (SN qpn)
+  | RDependency (PI qpn)      -- ^ reverse package dependency
+  | PDependency (PI qpn)      -- ^ package dependency
+  | FDependency (FN qpn) Bool -- ^ flag dependency
+  | SDependency (SN qpn)      -- ^ stanza dependency
   deriving (Eq, Show)
 
 instance Functor GoalReason where
   fmap _ UserGoal           = UserGoal
+  fmap f (RDependency pi)   = RDependency (fmap f pi)
   fmap f (PDependency pi)   = PDependency (fmap f pi)
   fmap f (FDependency fn b) = FDependency (fmap f fn) b
   fmap f (SDependency sn)   = SDependency (fmap f sn)
@@ -174,6 +176,7 @@ type QGoalReasonChain = GoalReasonChain QPN
 
 goalReasonToVars :: GoalReason qpn -> ConflictSet qpn
 goalReasonToVars UserGoal                 = S.empty
+goalReasonToVars (RDependency (PI qpn _)) = S.singleton (P qpn)
 goalReasonToVars (PDependency (PI qpn _)) = S.singleton (P qpn)
 goalReasonToVars (FDependency qfn _)      = S.singleton (F qfn)
 goalReasonToVars (SDependency qsn)        = S.singleton (S qsn)

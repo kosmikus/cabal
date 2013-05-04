@@ -57,17 +57,24 @@ extendOpen qpn' gs s@(BS { rdeps = gs', open = o' }) = go gs' o' gs
       | otherwise                                         = go (M.insert qpn [qpn']  g) (cons ng () o) ngs
                                        -- code above is correct; insert/adjust have different arg order
 
-extendOpen' :: QPN -> [Dep QPN] -> BuildState -> BuildState
-extendOpen' qpn' rds s@(BS { rdeps = gs', open = o' }) = go gs' o' rds
+-- | Variant of extendOpen for reverse dependencies.
+--
+-- TODO: Should be unified with 'extendOpen'. The difference is in
+-- the way we update the reverse dependency map (oh, the irony). We
+-- really only need to update the goal set here. The dependencies of
+-- the new goal will take care of the ordering constraints.
+extendOpen' :: QPN -> [OpenGoal] -> BuildState -> BuildState
+extendOpen' qpn' gs s@(BS { rdeps = gs', open = o' }) = go gs' o' gs
   where
-    go :: RevDepMap -> PSQ OpenGoal () -> [Dep QPN] -> BuildState
-    go g o []                                               = s { rdeps = g, open = o }
-    go g o (ng@(Dep qpn _) : ngs)
-      | qpn == qpn'                                         = go                  g              o  ngs
+    go :: RevDepMap -> PSQ OpenGoal () -> [OpenGoal] -> BuildState
+    go g o []                                             = s { rdeps = g, open = o }
+    go g o (ng@(OpenGoal (Simple (Dep qpn _)) _gr) : ngs)
+      | qpn == qpn'                                       = go                      g              o  ngs
                                        -- we ignore self-dependencies at this point; TODO: more care may be needed
-      | qpn `M.member` g                                    = go                  g              o  ngs
-      | otherwise                                           = go (M.insert qpn [] g) (cons (OpenGoal (Simple ng) []) () o) ngs
+      | qpn `M.member` g                                  = go                      g              o  ngs
+      | otherwise                                         = go (M.insert qpn [] g) (cons ng () o) ngs
                                        -- code above is correct; insert/adjust have different arg order
+    go g o (_ng                                    : ngs) = go g o ngs -- should not happen, we only add simple goals for revdeps
 
 -- | Update the current scope by taking into account the encapsulations that
 -- are defined for the current package.
@@ -79,15 +86,16 @@ establishScope (Q pp pn) ecs s =
 
 -- | Given the current scope, qualify all the package names in the given set of
 -- dependencies and then extend the set of open goals accordingly.
-scopedExtendOpen :: QPN -> I -> QGoalReasonChain -> FlaggedDeps PN -> FlagInfo -> [PI PN] ->
+scopedExtendOpen :: QPN -> I -> PI QPN -> QGoalReasonChain -> FlaggedDeps PN -> FlagInfo -> [PI PN] ->
                     BuildState -> BuildState
-scopedExtendOpen qpn i gr fdeps fdefs rdeps s = trace (show qrdeps) (extendOpen' qpn qrdeps (extendOpen qpn gs s))
+scopedExtendOpen qpn i grqpi gr fdeps fdefs rdeps s = trace (show qrdeps) (extendOpen' qpn rgs (extendOpen qpn gs s))
   where
     sc     = scope s
     qfdeps = L.map (fmap (qualify sc)) fdeps -- qualify all the package names
     qfdefs = L.map (\ (fn, b) -> Flagged (FN (PI qpn i) fn) b [] []) $ M.toList fdefs
     qrdeps = L.map (\ (PI pn _) -> Dep (qualify sc pn) (Constrained [])) rdeps
-    gs     = L.map (flip OpenGoal gr) (qfdeps ++ qfdefs)
+    rgs    = L.map (flip OpenGoal (RDependency grqpi : gr) . Simple)  qrdeps
+    gs     = L.map (flip OpenGoal (PDependency grqpi : gr)         ) (qfdeps ++ qfdefs)
 
 data BuildType = Goals | OneGoal OpenGoal | Instance QPN I PInfo QGoalReasonChain (Map Ver [PI PN])
 
@@ -146,7 +154,7 @@ build = ana go
     -- TODO: We could inline this above.
     go bs@(BS { next = Instance qpn i (PInfo fdeps fdefs ecs _) gr iRevDeps }) =
       go ((establishScope qpn ecs
-             (scopedExtendOpen qpn i (PDependency (PI qpn i) : gr) fdeps fdefs (revdeps i) bs))
+             (scopedExtendOpen qpn i (PI qpn i) gr fdeps fdefs (revdeps i) bs))
              { next = Goals })
       where
         revdeps (I v InRepo) = let r = M.findWithDefault [] v iRevDeps in trace (show (i, iRevDeps, r)) r

@@ -72,6 +72,7 @@ showGRs []       = ""
 
 showGR :: GoalReason QPN -> String
 showGR UserGoal            = " (user goal)"
+showGR (RDependency pi)    = " (reverse dependency of " ++ showPI pi    ++ ")"
 showGR (PDependency pi)    = " (dependency of " ++ showPI pi            ++ ")"
 showGR (FDependency qfn b) = " (dependency of " ++ showQFNBool qfn b    ++ ")"
 showGR (SDependency qsn)   = " (dependency of " ++ showQSNBool qsn True ++ ")"
