@@ -336,8 +336,20 @@ configure (pkg_descr0, pbi) cfg
                 Installed.sourcePackageId = pid
               }
             internalPackageSet = PackageIndex.fromList [internalPackage]
-        installedPackageSet <- getInstalledPackages (lessVerbose verbosity) comp
+        -- We refine the set of installedPackages by taking the explicitly specified
+        -- package ids into account.
+        installedPackageSet0 <- getInstalledPackages (lessVerbose verbosity) comp
                                       packageDbs programsConfig'
+        -- TODO: we silently ignore errors here
+        let installedPackageSet =
+              foldr
+                (\ipid ips ->
+                  maybe ips
+                    (\ipinfo -> PackageIndex.insert ipinfo $
+                                PackageIndex.deletePackageName (packageName ipinfo) ips)
+                    (PackageIndex.lookupInstalledPackageId ips ipid))
+                installedPackageSet0
+                (configPackageIds cfg)
 
         let -- Constraint test function for the solver
             dependencySatisfiable =
@@ -650,11 +662,11 @@ reportSelectedDependencies :: Verbosity
 reportSelectedDependencies verbosity deps =
   info verbosity $ unlines
     [ "Dependency " ++ display (simplifyDependency dep)
-                    ++ ": using " ++ display pkgid
+                    ++ ": using " ++ pkgid
     | resolved <- deps
     , let (dep, pkgid) = case resolved of
-            ExternalDependency dep' pkg'   -> (dep', packageId pkg')
-            InternalDependency dep' pkgid' -> (dep', pkgid') ]
+            ExternalDependency dep' pkg'   -> (dep', display (installedPackageId pkg'))
+            InternalDependency dep' pkgid' -> (dep', display pkgid') ]
 
 reportFailedDependencies :: [FailedDependency] -> IO ()
 reportFailedDependencies []     = return ()

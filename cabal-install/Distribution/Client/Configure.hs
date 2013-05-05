@@ -83,12 +83,13 @@ configure verbosity packageDBs repos comp platform conf
         configureCommand (const configFlags) extraArgs
 
     Right installPlan -> case InstallPlan.ready installPlan of
-      [pkg@(ConfiguredPackage (SourcePackage _ _ (LocalUnpackedPackage _) _) _ _ _)] ->
+      [(pkg@(ConfiguredPackage (SourcePackage _ _ (LocalUnpackedPackage _) _) _ _ _), ipids)] ->
         configurePackage verbosity
           (InstallPlan.planPlatform installPlan)
           (InstallPlan.planCompiler installPlan)
           (setupScriptOptions installedPkgIndex)
-          configFlags pkg extraArgs
+          (configFlags { configPackageIds = configPackageIds configFlags ++ ipids })
+          pkg extraArgs
 
       _ -> die $ "internal error: configure install plan should have exactly "
               ++ "one local ready package."

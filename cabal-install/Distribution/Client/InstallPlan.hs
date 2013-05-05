@@ -47,10 +47,12 @@ module Distribution.Client.InstallPlan (
 
 import Distribution.Client.Types
          ( SourcePackage(packageDescription), ConfiguredPackage(..)
-         , InstalledPackage, BuildFailure, BuildSuccess, enableStanzas )
+         , InstalledPackage(..), BuildFailure, BuildSuccess, enableStanzas )
 import Distribution.Package
          ( PackageIdentifier(..), PackageName(..), Package(..), packageName
-         , PackageFixedDeps(..), Dependency(..) )
+         , PackageFixedDeps(..), Dependency(..), InstalledPackageId )
+import Distribution.InstalledPackageInfo
+         ( installedPackageId )
 import Distribution.Version
          ( Version, withinRange )
 import Distribution.PackageDescription
@@ -204,22 +206,27 @@ remove shouldRemove plan =
 -- configured state and have all their dependencies installed already.
 -- The plan is complete if the result is @[]@.
 --
-ready :: InstallPlan -> [ConfiguredPackage]
+ready :: InstallPlan -> [(ConfiguredPackage, [InstalledPackageId])]
 ready plan = assert check readyPackages
   where
     check = if null readyPackages && null processingPackages
               then null configuredPackages
               else True
     configuredPackages = [ pkg | Configured pkg <- toList plan ]
-    processingPackages = [ pkg | Processing pkg <- toList plan]
-    readyPackages = filter (all isInstalled . depends) configuredPackages
+    processingPackages = [ pkg | Processing pkg <- toList plan ]
+    readyPackages      = [ (pkg, deps)
+                         | pkg <- configuredPackages
+                         , Just mdeps <- [mapM isInstalled . depends $ pkg]
+                         , let deps = [ dep | Just dep <- mdeps ]
+                         ]
+    -- readyPackages = filter (all isInstalled . depends) configuredPackages
     isInstalled pkg =
       case PackageIndex.lookupPackageId (planIndex plan) pkg of
-        Just (Configured  _) -> False
-        Just (Processing  _) -> False
+        Just (Configured  _) -> Nothing
+        Just (Processing  _) -> Nothing
         Just (Failed    _ _) -> internalError depOnFailed
-        Just (PreExisting _) -> True
-        Just (Installed _ _) -> True
+        Just (PreExisting (InstalledPackage i _)) -> Just (Just (installedPackageId i))
+        Just (Installed _ _) -> Just Nothing
         Nothing              -> internalError incomplete
     incomplete  = "install plan is not closed"
     depOnFailed = "configured package depends on failed package"

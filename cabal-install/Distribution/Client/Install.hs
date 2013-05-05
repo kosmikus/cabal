@@ -27,6 +27,8 @@ module Distribution.Client.Install (
     pruneInstallPlan
   ) where
 
+import Debug.Trace
+
 import Data.List
          ( unfoldr, nub, sort, (\\) )
 import Data.Maybe
@@ -453,7 +455,7 @@ linearizeInstallPlan installedPkgIndex plan =
   where
     next plan' = case InstallPlan.ready plan' of
       []      -> Nothing
-      (pkg:_) -> Just ((pkg, status), plan'')
+      ((pkg, _):_) -> Just ((pkg, status), plan'')
         where
           pkgid  = packageId pkg
           status = packageStatus installedPkgIndex pkg
@@ -812,7 +814,8 @@ performInstallations verbosity
 
   executeInstallPlan verbosity jobControl useLogFile installPlan $ \cpkg ->
     installConfiguredPackage platform compid configFlags
-                             cpkg $ \configFlags' src pkg pkgoverride ->
+                             cpkg $ \configFlags' src pkg pkgoverride -> do
+      putStrLn $ "DEBUG: " ++ show (configConstraints configFlags')
       fetchSourcePackage verbosity fetchLimit src $ \src' ->
         installLocalPackage verbosity buildLimit (packageId pkg) src' $ \mpath ->
           installUnpackedPackage verbosity buildLimit installLock numJobs
@@ -915,7 +918,7 @@ executeInstallPlan :: Verbosity
                    -> JobControl IO (PackageId, BuildResult)
                    -> UseLogFile
                    -> InstallPlan
-                   -> (ConfiguredPackage -> IO BuildResult)
+                   -> ((ConfiguredPackage, [InstalledPackageId]) -> IO BuildResult)
                    -> IO InstallPlan
 executeInstallPlan verbosity jobCtl useLogFile plan0 installPkg =
     tryNewTasks 0 plan0
@@ -928,13 +931,13 @@ executeInstallPlan verbosity jobCtl useLogFile plan0 installPkg =
           sequence_
             [ do info verbosity $ "Ready to install " ++ display pkgid
                  spawnJob jobCtl $ do
-                   buildResult <- installPkg pkg
+                   buildResult <- installPkg pkgpair
                    return (packageId pkg, buildResult)
-            | pkg <- pkgs
+            | pkgpair@(pkg, _) <- pkgs
             , let pkgid = packageId pkg]
 
           let taskCount' = taskCount + length pkgs
-              plan'      = InstallPlan.processing pkgs plan
+              plan'      = InstallPlan.processing (map fst pkgs) plan
           waitForTasks taskCount' plan'
 
     waitForTasks taskCount plan = do
@@ -989,17 +992,18 @@ executeInstallPlan verbosity jobCtl useLogFile plan0 installPkg =
 -- assignment or dependency constraints and use the new ones.
 --
 installConfiguredPackage :: Platform -> CompilerId
-                         ->  ConfigFlags -> ConfiguredPackage
+                         ->  ConfigFlags -> (ConfiguredPackage, [InstalledPackageId])
                          -> (ConfigFlags -> PackageLocation (Maybe FilePath)
                                          -> PackageDescription
                                          -> PackageDescriptionOverride -> a)
                          -> a
 installConfiguredPackage platform comp configFlags
   (ConfiguredPackage (SourcePackage _ gpkg source pkgoverride)
-   flags stanzas deps)
-  installPkg = installPkg configFlags {
+   flags stanzas deps, ipids)
+  installPkg = trace (show ipids) $ installPkg configFlags {
     configConfigurationsFlags = flags,
     configConstraints = map thisPackageVersion deps,
+    configPackageIds = ipids,
     configBenchmarks = toFlag False,
     configTests = toFlag (TestStanzas `elem` stanzas)
   } source pkg pkgoverride
