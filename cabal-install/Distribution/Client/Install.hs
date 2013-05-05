@@ -27,8 +27,6 @@ module Distribution.Client.Install (
     pruneInstallPlan
   ) where
 
-import Debug.Trace
-
 import Data.List
          ( unfoldr, nub, sort, (\\) )
 import Data.Maybe
@@ -815,7 +813,6 @@ performInstallations verbosity
   executeInstallPlan verbosity jobControl useLogFile installPlan $ \cpkg ->
     installConfiguredPackage platform compid configFlags
                              cpkg $ \configFlags' src pkg pkgoverride -> do
-      putStrLn $ "DEBUG: " ++ show (configConstraints configFlags')
       fetchSourcePackage verbosity fetchLimit src $ \src' ->
         installLocalPackage verbosity buildLimit (packageId pkg) src' $ \mpath ->
           installUnpackedPackage verbosity buildLimit installLock numJobs
@@ -1000,7 +997,7 @@ installConfiguredPackage :: Platform -> CompilerId
 installConfiguredPackage platform comp configFlags
   (ConfiguredPackage (SourcePackage _ gpkg source pkgoverride)
    flags stanzas deps, ipids)
-  installPkg = trace (show ipids) $ installPkg configFlags {
+  installPkg = installPkg configFlags {
     configConfigurationsFlags = flags,
     configConstraints = map thisPackageVersion deps,
     configPackageIds = ipids,
