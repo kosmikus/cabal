@@ -228,16 +228,19 @@ configureOptions = commandOptions configureCommand
 
 filterConfigureFlags :: ConfigFlags -> Version -> ConfigFlags
 filterConfigureFlags flags cabalLibVersion
-  | cabalLibVersion >= Version [1,14,0] [] = flags
+  | cabalLibVersion >= Version [1,17,0] [] = flags
   | cabalLibVersion <  Version [1,3,10] [] = flags_1_3_10
   | cabalLibVersion <  Version [1,10,0] [] = flags_1_10_0
   | cabalLibVersion <  Version [1,14,0] [] = flags_1_14_0
+  | cabalLibVersion <  Version [1,17,0] [] = flags_1_17_0
 
   -- A no-op that silences the "pattern match is non-exhaustive" warning.
   | otherwise = flags
   where
+    -- Cabal < 1.17.0 doesn't know about --package-id.
+    flags_1_17_0 = flags        { configPackageIds  = [] }
     -- Cabal < 1.14.0 doesn't know about --disable-benchmarks.
-    flags_1_14_0 = flags        { configBenchmarks  = NoFlag }
+    flags_1_14_0 = flags_1_17_0 { configBenchmarks  = NoFlag }
     -- Cabal < 1.10.0 doesn't know about --disable-tests.
     flags_1_10_0 = flags_1_14_0 { configTests       = NoFlag }
     -- Cabal < 1.3.10 does not grok the constraints flag.
@@ -741,7 +744,9 @@ installCommand = CommandUI {
      ++ "    Constrained package version\n",
   commandDefaultFlags = (mempty, mempty, mempty, mempty),
   commandOptions      = \showOrParseArgs ->
-       liftOptions get1 set1 (filter ((/="constraint") . optionName) $
+       liftOptions get1 set1
+         (filter ( (\ x -> not (x `elem` ["constraint", "package-id"]))
+                 . optionName) $
                               configureOptions   showOrParseArgs)
     ++ liftOptions get2 set2 (configureExOptions showOrParseArgs)
     ++ liftOptions get3 set3 (installOptions     showOrParseArgs)
