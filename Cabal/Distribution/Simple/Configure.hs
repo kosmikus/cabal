@@ -341,14 +341,15 @@ configure (pkg_descr0, pbi) cfg
         installedPackageSet0 <- getInstalledPackages (lessVerbose verbosity) comp
                                       packageDbs programsConfig'
         -- TODO: we silently ignore errors here
-        let installedPackageSet =
+        let (installedPackageSet, unknownPackageIds) =
               foldr
-                (\ipid ips ->
-                  maybe ips
-                    (\ipinfo -> PackageIndex.insert ipinfo $
-                                PackageIndex.deletePackageName (packageName ipinfo) ips)
+                (\ipid (ips, errs) ->
+                  maybe
+                    (ips, ipid : errs)
+                    (\ipinfo -> (PackageIndex.insert ipinfo $
+                                 PackageIndex.deletePackageName (packageName ipinfo) ips, errs))
                     (PackageIndex.lookupInstalledPackageId ips ipid))
-                installedPackageSet0
+                (installedPackageSet0, [])
                 (configPackageIds cfg)
 
         let -- Constraint test function for the solver
@@ -416,6 +417,7 @@ configure (pkg_descr0, pbi) cfg
                ++ "package. To use this feature the package must specify at "
                ++ "least 'cabal-version: >= 1.8'."
 
+        reportUnknownPackageIds unknownPackageIds
         reportFailedDependencies failedDeps
         reportSelectedDependencies verbosity allPkgDeps
 
@@ -667,6 +669,14 @@ reportSelectedDependencies verbosity deps =
     , let (dep, pkgid) = case resolved of
             ExternalDependency dep' pkg'   -> (dep', display (installedPackageId pkg'))
             InternalDependency dep' pkgid' -> (dep', display pkgid') ]
+
+reportUnknownPackageIds :: [InstalledPackageId] -> IO ()
+reportUnknownPackageIds []    = return ()
+reportUnknownPackageIds ipids =
+    die (intercalate "\n\n" (map reportUnknownPackageId ipids))
+  where
+    reportUnknownPackageId ipid =
+      "explicitly requested package id " ++ display ipid ++ " is unknown."
 
 reportFailedDependencies :: [FailedDependency] -> IO ()
 reportFailedDependencies []     = return ()
