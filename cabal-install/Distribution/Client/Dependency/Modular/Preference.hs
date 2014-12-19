@@ -231,6 +231,19 @@ preferBaseGoalChoice = trav go
     preferBase _ (OpenGoal (Simple (Dep (Q [] pn) _)) _) | unPN pn == "base" = GT
     preferBase _ _                                                           = EQ
 
+-- | Transformation that sorts goal choices such that goals for packages
+-- that have installed options available are preferred. The reasoning is
+-- that making such choices early on gives them more importance, and makes
+-- install plans that contain reinstalls less likely.
+preferGoalsWithInstalledOptions :: Tree a -> Tree a
+preferGoalsWithInstalledOptions = trav go
+  where
+    go (GoalChoiceF xs) = GoalChoiceF (P.sortBy (comparing (not . hasInstalled)) xs)
+      -- The use of 'not' above is correct: we want to prefer the packages that
+      -- *have* installed options, but 'True' is larger than 'False', so in order
+      -- to get the desired packages to the beginning, we have to flip truth values.
+    go x                = x
+
 -- | Transformation that sorts choice nodes so that
 -- child nodes with a small branching degree are preferred. As a
 -- special case, choices with 0 branches will be preferred (as they

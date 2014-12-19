@@ -79,6 +79,16 @@ active :: Tree a -> Bool
 active (Fail _ _) = False
 active _          = True
 
+-- | Checks whether a node is a package choice with options corresponding
+-- to an installed package.
+hasInstalled :: Tree a -> Bool
+hasInstalled (PChoice    _ _     ts) = P.anyKeys instI ts
+hasInstalled (FChoice    _ _ _ _ _ ) = False
+hasInstalled (SChoice    _ _ _   _ ) = False
+hasInstalled (GoalChoice         _ ) = False
+hasInstalled (Done       _         ) = False
+hasInstalled (Fail       _ _       ) = False
+
 -- | Determines how many active choices are available in a node. Note that we
 -- count goal choices as having one choice, always.
 choices :: Tree a -> Int

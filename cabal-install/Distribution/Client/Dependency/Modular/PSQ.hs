@@ -75,6 +75,9 @@ filterKeys p (PSQ xs) = PSQ (S.filter (p . fst) xs)
 filter :: (a -> Bool) -> PSQ k a -> PSQ k a
 filter p (PSQ xs) = PSQ (S.filter (p . snd) xs)
 
+anyKeys :: (k -> Bool) -> PSQ k a -> Bool
+anyKeys p (PSQ xs) = S.any (p . fst) xs
+
 length :: PSQ k a -> Int
 length (PSQ xs) = S.length xs
 
