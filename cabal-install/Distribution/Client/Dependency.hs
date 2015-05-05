@@ -508,17 +508,18 @@ resolveDependencies :: Platform
                     -> CompilerInfo
                     -> Solver
                     -> DepResolverParams
-                    -> Progress String String InstallPlan
+                    -> IO (Progress String String InstallPlan)
 
     --TODO: is this needed here? see dontUpgradeNonUpgradeablePackages
 resolveDependencies platform comp _solver params
   | null (depResolverTargets params)
-  = return (mkInstallPlan platform comp [])
+  = return (return (mkInstallPlan platform comp []))
 
 resolveDependencies platform comp  solver params =
 
-    Step (debugDepResolverParams finalparams)
-  $ fmap (mkInstallPlan platform comp)
+    fmap ( Step (debugDepResolverParams finalparams)
+         . fmap (mkInstallPlan platform comp)
+         )
   $ runSolver solver (SolverConfig reorderGoals indGoals noReinstalls
                       shadowing strFlags maxBkjumps)
                      platform comp installedPkgIndex sourcePkgIndex

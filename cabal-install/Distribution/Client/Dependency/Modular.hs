@@ -36,6 +36,7 @@ import Distribution.System
 -- solver. Performs the necessary translations before and after.
 modularResolver :: SolverConfig -> DependencyResolver
 modularResolver sc (Platform arch os) cinfo iidx sidx pprefs pcs pns =
+  return                          $ -- the modular solver is entirely "pure"
   fmap (uncurry postprocess)      $ -- convert install plan
   logToProgress (maxBackjumps sc) $ -- convert log format into progress format
   solve sc idx pprefs gcs pns

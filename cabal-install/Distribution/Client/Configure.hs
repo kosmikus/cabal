@@ -205,7 +205,7 @@ planLocalPackage verbosity comp platform configFlags configExFlags installedPkgI
             (SourcePackageDb mempty packagePrefs)
             [SpecificSourcePackage localPkg]
 
-  return (resolveDependencies platform (compilerInfo comp) solver resolverParams)
+  resolveDependencies platform (compilerInfo comp) solver resolverParams
 
 
 -- | Call an installer for an 'SourcePackage' but override the configure

@@ -248,6 +248,7 @@ search configure pref constraints =
 topDownResolver :: DependencyResolver
 topDownResolver platform cinfo installedPkgIndex sourcePkgIndex
                 preferences constraints targets =
+    return $ -- the topdown solver is entirely "pure"
     mapMessages (topDownResolver' platform cinfo
                                   (convert installedPkgIndex) sourcePkgIndex
                                   preferences constraints targets)

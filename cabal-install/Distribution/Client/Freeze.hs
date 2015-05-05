@@ -133,12 +133,11 @@ planPackages verbosity comp platform mSandboxPkgInfo freezeFlags
   solver <- chooseSolver verbosity
             (fromFlag (freezeSolver freezeFlags)) (compilerInfo comp)
   notice verbosity "Resolving dependencies..."
-
-  installPlan <- foldProgress logMsg die return $
-                   resolveDependencies
-                     platform (compilerInfo comp)
-                     solver
-                     resolverParams
+  progress <- resolveDependencies
+                platform (compilerInfo comp)
+                solver
+                resolverParams
+  installPlan <- foldProgress logMsg die return progress
 
   return $ pruneInstallPlan installPlan pkgSpecifiers
 
