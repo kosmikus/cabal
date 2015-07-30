@@ -64,7 +64,11 @@ unknownPackageInfo = PackageInfo [] M.empty M.empty S.empty
 
 data Instance = Instance { instVersion :: Version, instLocation :: Location }
   deriving Show
+
 data Location = Source | Installed InstalledPackageId
+  deriving Show
+
+data PackageInstance = PackageInstance PackageName Instance
   deriving Show
 
 showInstance :: Instance -> String
@@ -83,20 +87,12 @@ data InstanceInfo = InstanceInfo { iiInstance :: Instance, iiDeps :: SDepsFree }
 data GlobalFlag = GlobalFlag PackageName FlagName
   deriving (Show, Eq, Ord)
 
--- Abstract syntax for solver conditions.
-data SDeps :: * -> * where
-  SBool :: Bool                           -> SDeps Bool
-  SVer  :: Integer                        -> SDeps Integer
-  SPkg  :: PackageName                    -> SDeps Integer
-  SFlag :: GlobalFlag                     -> SDeps Bool
-  SEq   :: SDeps a -> SDeps a             -> SDeps Bool
-  SLe   :: SDeps Integer -> SDeps Integer -> SDeps Bool
-  SGe   :: SDeps Integer -> SDeps Integer -> SDeps Bool
-  SAnd  :: SDeps Bool -> SDeps Bool       -> SDeps Bool
-  SOr   :: SDeps Bool -> SDeps Bool       -> SDeps Bool
-  SNot  :: SDeps Bool                     -> SDeps Bool
-
-deriving instance Show (SDeps a)
+data SolvedPackage = SolvedPackage
+  { spkgInstance :: PackageInstance
+  , spkgFlags    :: FlagAssignment
+  , spkgStanzas  :: [OptionalStanza]
+  , spkgDeps     :: ComponentDeps [PackageInstance]
+  }
 
 data Vars = Vars
   { vSolver :: SMT.Solver
@@ -131,43 +127,6 @@ pkgVarName (PackageName pn) = "pkg/" ++ pn
 
 flagVarName :: GlobalFlag -> String
 flagVarName (GlobalFlag (PackageName pn) (FlagName fn)) = "flag/" ++ pn ++ "/" ++ fn
-
-translate :: SDeps a -> StateT Vars IO SMT.SExpr
-translate (SBool b)    = return $ SMT.bool b
-translate (SVer i)     = return $ SMT.int i
-translate (SPkg pn)    = sPkg  pn
-translate (SFlag gf)   = sFlag gf
-translate (SEq  d1 d2) = liftM2 SMT.eq  (translate d1) (translate d2)
-translate (SLe  d1 d2) = liftM2 SMT.leq (translate d1) (translate d2)
-translate (SGe  d1 d2) = liftM2 SMT.geq (translate d1) (translate d2)
-translate (SAnd d1 d2) = liftM2 SMT.and (translate d1) (translate d2)
-translate (SOr  d1 d2) = liftM2 SMT.or  (translate d1) (translate d2)
-translate (SNot d)     = liftM  SMT.not (translate d)
-
-freePkgs :: SDeps a -> [PackageName]
-freePkgs (SPkg pn)    = [pn]
-freePkgs (SEq  d1 d2) = freePkgs d1 ++ freePkgs d2
-freePkgs (SLe  d1 d2) = freePkgs d1 ++ freePkgs d2
-freePkgs (SGe  d1 d2) = freePkgs d1 ++ freePkgs d2
-freePkgs (SAnd d1 d2) = freePkgs d1 ++ freePkgs d2
-freePkgs (SOr  d1 d2) = freePkgs d1 ++ freePkgs d2
-freePkgs _            = []
-
-sAnd' :: [SDeps Bool] -> SDeps Bool
-sAnd' [] = SBool True
-sAnd' xs = foldr1 SAnd xs
-
-sAnd :: [SDepsFree] -> SDepsFree
-sAnd [] = SDepsFree (SBool True) []
-sAnd xs = foldr1 (cmb SAnd) xs
-
-sOr' :: [SDeps Bool] -> SDeps Bool
-sOr' [] = SBool False
-sOr' xs = foldr1 SOr xs
-
-sOr :: [SDepsFree] -> SDepsFree
-sOr [] = SDepsFree (SBool False) []
-sOr xs = foldr1 (cmb SOr) xs
 
 externalSMTResolver :: SolverConfig -> DependencyResolver
 externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
@@ -263,7 +222,72 @@ closure idx = go S.empty
                                 in  SAnd c (go (S.insert pn visited) (pns ++ candidates))
 
 --------------------------------------------------------------------------
--- Index conversion
+-- Solver dependency expressions
+--------------------------------------------------------------------------
+
+-- Abstract syntax for solver conditions.
+data SDeps :: * -> * where
+  SBool :: Bool                           -> SDeps Bool
+  SVer  :: Integer                        -> SDeps Integer
+  SPkg  :: PackageName                    -> SDeps Integer
+  SFlag :: GlobalFlag                     -> SDeps Bool
+  SEq   :: SDeps a -> SDeps a             -> SDeps Bool
+  SLe   :: SDeps Integer -> SDeps Integer -> SDeps Bool
+  SGe   :: SDeps Integer -> SDeps Integer -> SDeps Bool
+  SAnd  :: SDeps Bool -> SDeps Bool       -> SDeps Bool
+  SOr   :: SDeps Bool -> SDeps Bool       -> SDeps Bool
+  SNot  :: SDeps Bool                     -> SDeps Bool
+
+deriving instance Show (SDeps a)
+
+data SDepsFree = SDepsFree (SDeps Bool) [PackageName]
+  deriving Show
+
+sAnd' :: [SDeps Bool] -> SDeps Bool
+sAnd' [] = SBool True
+sAnd' xs = foldr1 SAnd xs
+
+sAnd :: [SDepsFree] -> SDepsFree
+sAnd [] = SDepsFree (SBool True) []
+sAnd xs = foldr1 (cmb SAnd) xs
+
+sOr' :: [SDeps Bool] -> SDeps Bool
+sOr' [] = SBool False
+sOr' xs = foldr1 SOr xs
+
+sOr :: [SDepsFree] -> SDepsFree
+sOr [] = SDepsFree (SBool False) []
+sOr xs = foldr1 (cmb SOr) xs
+
+cmb :: (SDeps Bool -> SDeps Bool -> SDeps Bool) -> SDepsFree -> SDepsFree -> SDepsFree
+cmb op (SDepsFree d1 pn1) (SDepsFree d2 pn2) = SDepsFree (op d1 d2) (pn1 ++ pn2)
+
+cmb1 :: (SDeps Bool -> SDeps Bool) -> SDepsFree -> SDepsFree
+cmb1 op (SDepsFree d pn) = SDepsFree (op d) pn
+
+translate :: SDeps a -> StateT Vars IO SMT.SExpr
+translate (SBool b)    = return $ SMT.bool b
+translate (SVer i)     = return $ SMT.int i
+translate (SPkg pn)    = sPkg  pn
+translate (SFlag gf)   = sFlag gf
+translate (SEq  d1 d2) = liftM2 SMT.eq  (translate d1) (translate d2)
+translate (SLe  d1 d2) = liftM2 SMT.leq (translate d1) (translate d2)
+translate (SGe  d1 d2) = liftM2 SMT.geq (translate d1) (translate d2)
+translate (SAnd d1 d2) = liftM2 SMT.and (translate d1) (translate d2)
+translate (SOr  d1 d2) = liftM2 SMT.or  (translate d1) (translate d2)
+translate (SNot d)     = liftM  SMT.not (translate d)
+
+freePkgs :: SDeps a -> [PackageName]
+freePkgs (SPkg pn)    = [pn]
+freePkgs (SEq  d1 d2) = freePkgs d1 ++ freePkgs d2
+freePkgs (SLe  d1 d2) = freePkgs d1 ++ freePkgs d2
+freePkgs (SGe  d1 d2) = freePkgs d1 ++ freePkgs d2
+freePkgs (SAnd d1 d2) = freePkgs d1 ++ freePkgs d2
+freePkgs (SOr  d1 d2) = freePkgs d1 ++ freePkgs d2
+freePkgs _            = []
+
+--------------------------------------------------------------------------
+-- Index conversion (start)
 --------------------------------------------------------------------------
 
 packageCondition :: PackageName -> PackageInfo -> SDepsFree
@@ -438,17 +462,10 @@ packageDependency final (Dependency pn vr) =
   $ L.filter (\ (v, _) -> v `withinRange` vr)
   $ piAssocs (findPackage final pn)
 
-data SDepsFree = SDepsFree (SDeps Bool) [PackageName]
-  deriving Show
-cmb :: (SDeps Bool -> SDeps Bool -> SDeps Bool) -> SDepsFree -> SDepsFree -> SDepsFree
-cmb op (SDepsFree d1 pn1) (SDepsFree d2 pn2) = SDepsFree (op d1 d2) (pn1 ++ pn2)
-
-cmb1 :: (SDeps Bool -> SDeps Bool) -> SDepsFree -> SDepsFree
-cmb1 op (SDepsFree d pn) = SDepsFree (op d) pn
-
-data PackageInstance = PackageInstance PackageName Instance
-  deriving Show
-
+--------------------------------------------------------------------------
+-- Index conversion (end)
+--------------------------------------------------------------------------
+--
 -- Taken from Modular.Configured and Modular.ConfiguredConversion:
 
 mkPlan :: Platform
@@ -459,13 +476,6 @@ mkPlan :: Platform
        -> Either [PlanProblem] InstallPlan
 mkPlan platform cinfo iidx sidx spkgs =
   new platform cinfo False (SI.fromList (L.map (convSolvedPackage iidx sidx) spkgs))
-
-data SolvedPackage = SolvedPackage
-  { spkgInstance :: PackageInstance
-  , spkgFlags    :: FlagAssignment
-  , spkgStanzas  :: [OptionalStanza]
-  , spkgDeps     :: ComponentDeps [PackageInstance]
-  }
 
 convPackageInstance :: PackageInstance -> Either InstalledPackageId PackageId
 convPackageInstance (PackageInstance _  (Instance _ (Installed i))) = Left i
