@@ -2,6 +2,8 @@
 module Distribution.Client.Dependency.ExternalSMT where
 
 import Control.Monad.State
+import Data.Function
+import Data.Monoid
 
 import Distribution.Client.ComponentDeps as CD
 import Distribution.Client.Dependency.Modular.Solver
@@ -95,9 +97,9 @@ data SolvedPackage = SolvedPackage
   }
 
 data Vars = Vars
-  { vSolver :: SMT.Solver
-  , vPkgs   :: Map PackageName SMT.SExpr
-  , vFlags  :: Map GlobalFlag SMT.SExpr
+  { vSolver :: SMT.Solver                 -- active solver process
+  , vPkgs   :: Map PackageName SMT.SExpr  -- known package variables
+  , vFlags  :: Map GlobalFlag  SMT.SExpr  -- known flag variables
   }
 
 sPkg :: PackageName -> StateT Vars IO SMT.SExpr
@@ -149,17 +151,106 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
             -- Let's try to translate back the results
             results <- SMT.getConsts slv $  L.map pkgVarName  (M.keys (vPkgs  fs))
                                          ++ L.map flagVarName (M.keys (vFlags fs))
-            putStr $ unlines [ var ++ ": " ++ show b
-                             | (var, SMT.Bool b) <- results
-                             ]
-            putStr $ unlines [ var ++ ": " ++ showInstance (iiInstance ii)
-                             | (var, SMT.Int ver) <- results
-                             , ver /= 0
-                             , let pi = idx M.! PackageName (drop 4 var) -- TODO: oh no!
-                             , let ii = piTo pi M.! ver
-                             ]
-          _   -> print r
-        error "unimplemented"
+
+            pkgassignment <- fmap concat $ forM (M.keys (vPkgs fs)) $ \ pn -> do
+              SMT.Int sver <- SMT.getConst slv (pkgVarName pn)
+              if sver /= 0
+                then do
+                  let pi    = idx M.! pn
+                  let ii    = piTo pi M.! sver
+                  let inst  = iiInstance ii
+                  return [(pn, inst)]
+                else return []
+
+            flagassignment <- forM (M.keys (vFlags fs)) $ \ gf -> do
+              SMT.Bool b <- SMT.getConst slv (flagVarName gf)
+              return (gf, b)
+
+            let finalpkgassignment  = M.fromList pkgassignment
+            let finalflagassignment = L.foldl' (\ a (gf, b) -> M.insert gf b a) gfa flagassignment
+
+            print pkgassignment
+            print flagassignment
+
+            let plan = flip L.map pkgassignment $ \ (pn, i) ->
+                  let pinst = PackageInstance pn i
+                  in  case convPackageInstance pinst of
+                        Left  pid ->
+                          let ipi  = fromJust $ SI.lookupInstalledPackageId iidx pid
+                              deps = L.map (packageId . fromJust . SI.lookupInstalledPackageId iidx) (IPI.depends ipi) -- TODO: risky, broken pkgs?
+                          in  PreExisting $ InstalledPackage ipi deps
+                        Right pid ->
+                          let sp = fromJust $ CI.lookupPackageId sidx pid
+                              GenericPackageDescription pkg flags libs exes _tests _benchs = CT.packageDescription sp
+                              fa = postProcessFlags finalflagassignment pn flags
+                              conv :: CondTree ConfVar [Dependency] a -> [ConfiguredId]
+                              conv = postProcessCondTree platform cinfo finalpkgassignment pn (M.fromList fa)
+                          in Configured  $ ConfiguredPackage
+                               sp
+                               fa
+                               []  -- TODO: treat test and bench
+                               (  fromLibraryDeps (maybe [] conv libs)
+                               <> CD.fromList (L.map (\ (exe, ct) -> (ComponentExe exe, conv ct)) exes)
+                               )
+
+            return (Done plan)
+          _   -> return (Fail (show r))
+
+postProcessCondTree :: Platform
+                    -> CompilerInfo
+                    -> Map PackageName Instance
+                    -> PackageName
+                    -> Map FlagName Bool
+                    -> CondTree ConfVar [Dependency] a -> [ConfiguredId]
+postProcessCondTree platform cinfo fpa pn fa (CondNode _ ds branches) = nubBy ((==) `on` confInstId) $
+     L.concatMap (postProcessDependency                fpa pn   ) ds
+  ++ L.concatMap (postProcessBranch     platform cinfo fpa pn fa) branches
+
+postProcessBranch :: Platform
+                  -> CompilerInfo
+                  -> Map PackageName Instance
+                  -> PackageName
+                  -> Map FlagName Bool
+                  -> ( Condition ConfVar
+                     , CondTree ConfVar [Dependency] a
+                     , Maybe (CondTree ConfVar [Dependency] a)
+                     )
+                  -> [ConfiguredId]
+postProcessBranch platform@(Platform arch os) cinfo fpa pn fa (cond, thenPart, maybeElsePart) =
+  go cond (          postProcessCondTree platform cinfo fpa pn fa  thenPart     )
+          (maybe [] (postProcessCondTree platform cinfo fpa pn fa) maybeElsePart)
+  where
+    go :: Condition ConfVar -> [ConfiguredId] -> [ConfiguredId] -> [ConfiguredId]
+    go (Lit True) t _ = t
+    go (Lit False) _ f = f
+    go (CNot c) t f = go c f t
+    go (CAnd c d) t f = go c (go d t f) f
+    go (COr c d) t f = go c t (go d t f)
+    go (Var (Flag flag)) t f = if fa !@ flag then t else f
+    go (Var (OS os')) t f = if os == os' then t else f
+    go (Var (Arch arch')) t f = if arch == arch' then t else f
+    go (Var (Impl cf cvr)) t f
+      -- TODO: This is marked as not completely ok in the modular solver.
+      |        matchImpl               (compilerInfoId     cinfo)
+        || any matchImpl (fromMaybe [] (compilerInfoCompat cinfo)) = t
+      | otherwise              = f
+      where
+        matchImpl :: CompilerId -> Bool
+        matchImpl (CompilerId cf' cv) = cf == cf' && cv `withinRange` cvr
+
+postProcessDependency :: Map PackageName Instance -> PackageName -> Dependency -> [ConfiguredId]
+postProcessDependency fpa pn' (Dependency pn _)
+  | pn == pn' = []  -- self-dependencies are dropped here
+  | otherwise = [ mkConfiguredId (PackageInstance pn (fpa !@ pn)) ]
+  -- TODO: is the lookup risky?
+
+postProcessFlags :: Map GlobalFlag Bool -> PackageName -> [Flag] -> FlagAssignment
+postProcessFlags ffa pn = L.map go
+  where
+    go :: Flag -> (FlagName, Bool)
+    go f = (fn, fromMaybe (flagDefault f) (M.lookup (GlobalFlag pn fn) ffa))
+      where
+        fn = flagName f
 
 -- | Translates a list of target package names into a solver condition.
 --
@@ -436,12 +527,8 @@ processBranch platform@(Platform arch os) cinfo final gfa flags pn (cond, thenPa
           Nothing -> fmap flagDefault (find (\ x -> flagName x == flag && flagManual x) flags)
           Just b  -> Just b
 
-    go (Var (OS os'))      t f
-      | os == os'              = t
-      | otherwise              = f
-    go (Var (Arch arch'))  t f
-      | arch == arch'          = t
-      | otherwise              = f
+    go (Var (OS os'))      t f = if os == os'     then t else f
+    go (Var (Arch arch'))  t f = if arch == arch' then t else f
     go (Var (Impl cf cvr)) t f
       -- TODO: This is marked as not completely ok in the modular solver.
       |        matchImpl               (compilerInfoId     cinfo)
