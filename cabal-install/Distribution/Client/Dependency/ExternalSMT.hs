@@ -1,3 +1,5 @@
+-- TODO: snaplet-persistent with ghc-7.8.4 leads to an install plan that fails during postprocessing
+
 {-# LANGUAGE GADTs, KindSignatures, StandaloneDeriving #-}
 module Distribution.Client.Dependency.ExternalSMT where
 
@@ -147,6 +149,15 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
       pns' = targets pns
       tclocond  = translate $ sAnd' [clocond, pcs', pns']
       tcloscore = translate $ closcore
+
+      term _        (Just 0)          = True
+      term (Just m) (Just n) | m >= n = True
+      term _        _                 = False
+ 
+      mid _        Nothing  = Nothing
+      mid Nothing  (Just n) = Just (n `div` 2 + 1)
+      mid (Just m) (Just n) = Just (((m + n) `div` 2) + 1)
+
   in  do
         putStrLn "Collecting constraints ..."
         slv <- SMT.newSolver "z3" ["-smt2", "-nw", "-in"] Nothing
@@ -154,24 +165,32 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
         putStrLn "Transferring to z3 ..."
         scorevar <- SMT.define slv "score" SMT.tInt sscore
         SMT.assert slv scond
-        SMT.push slv
         putStrLn "Solving ..."
-        let loop current = do
-              r <- SMT.check slv
-              case r of
-                SMT.Sat -> do
-                  SMT.Int score <- SMT.getConst slv "score"
-                  putStrLn $ "score: " ++ show score
-                  SMT.push slv
-                  SMT.assert slv (SMT.lt scorevar (SMT.int score))
-                  loop (Just score)
-                SMT.Unsat -> do
-                  SMT.pop slv
+        let loop lower current
+              | term lower current = do
                   case current of
                     Nothing -> return ()
                     Just n  -> SMT.assert slv (SMT.leq scorevar (SMT.int n))
                   SMT.check slv
-        r <- loop Nothing
+              | otherwise = do
+                  let middle = mid lower current
+                  SMT.push slv
+                  maybe (return ()) (\ c -> SMT.assert slv (SMT.lt  scorevar (SMT.int c))) middle
+                  maybe (return ()) (\ c -> SMT.assert slv (SMT.geq scorevar (SMT.int c))) lower
+                  r <- SMT.check slv
+                  case r of
+                    SMT.Sat -> do
+                      SMT.Int score <- SMT.getConst slv "score"
+                      putStrLn $ "score: " ++ show score
+                      loop lower (Just score)
+                    SMT.Unsat -> do
+                      SMT.pop slv
+                      case middle of
+                        Nothing -> return r
+                        Just l  -> do
+                          putStrLn $ "lower: " ++ show l
+                          loop middle current
+        r <- loop Nothing Nothing
         case r of
           SMT.Sat -> do
             SMT.Int score <- SMT.getConst slv "score"
@@ -195,8 +214,8 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
             let finalpkgassignment  = M.fromList pkgassignment
             let finalflagassignment = L.foldl' (\ a (gf, b) -> M.insert gf b a) gfa flagassignment
 
-            print pkgassignment
-            print flagassignment
+            -- print pkgassignment
+            -- print flagassignment
 
             let plan = flip L.map pkgassignment $ \ (pn, i) ->
                   let pinst = PackageInstance pn i
