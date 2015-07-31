@@ -68,11 +68,11 @@ data PackageInfo = PackageInfo
   { piAssocs :: [(Version, SVersion)]
   , piFrom   :: Map InstalledPackageId SVersion
   , piTo     :: Map SVersion InstanceInfo
-  , piFlags  :: Set FlagName  -- automatic flags only
+  , piFlags  :: [FlagName]  -- automatic flags only
   } deriving Show
 
 unknownPackageInfo :: PackageInfo
-unknownPackageInfo = PackageInfo [] M.empty M.empty S.empty
+unknownPackageInfo = PackageInfo [] M.empty M.empty []
 
 data Instance = Instance { instVersion :: Version, instLocation :: Location }
   deriving Show
@@ -137,6 +137,9 @@ sFlag gf = do
 pkgVarName :: PackageName -> String
 pkgVarName (PackageName pn) = "pkg/" ++ pn
 
+scoreVarName :: PackageName -> String
+scoreVarName (PackageName pn) = "score/" ++ pn
+
 flagVarName :: GlobalFlag -> String
 flagVarName (GlobalFlag (PackageName pn) (FlagName fn)) = "flag/" ++ pn ++ "/" ++ fn
 
@@ -144,7 +147,7 @@ externalSMTResolver :: SolverConfig -> DependencyResolver
 externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
   let gfa  = mkGlobalFlagAssignment pcs
       idx  = processIndexes platform cinfo gfa iidx sidx
-      (clocond, closcore)  = closure idx pns
+      (clocond, closcore) = closure idx pns
       pcs' = packageConstraints idx pcs
       pns' = targets pns
       tclocond  = translate $ sAnd' [clocond, pcs', pns']
@@ -161,10 +164,21 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
   in  do
         putStrLn "Collecting constraints ..."
         slv <- SMT.newSolver "z3" ["-smt2", "-nw", "-in"] Nothing
-        ((scond, sscore), fs) <- runStateT (liftM2 (,) tclocond tcloscore) (Vars slv M.empty M.empty)
-        putStrLn "Transferring to z3 ..."
-        scorevar <- SMT.define slv "score" SMT.tInt sscore
-        SMT.assert slv scond
+        SMT.defineFun slv "pkgscorefun" [("v", SMT.tInt)] SMT.tInt $
+          SMT.ite
+            (SMT.eq (SMT.const "v") (SMT.int 0))
+              (SMT.int 0)
+              (SMT.ite
+                (SMT.lt (SMT.const "v") (SMT.int 0))
+                (SMT.int 1)
+                (SMT.ite
+                  (SMT.eq (SMT.const "v") (SMT.int 1))
+                  (SMT.int 10)
+                  (SMT.add (SMT.int 1000) (SMT.mul (SMT.const "v") (SMT.int 10)))))
+        pkgvars <- fmap S.toList $ closure' idx slv pns
+        scorevar <- SMT.define slv "score" SMT.tInt (L.foldl' SMT.add (SMT.int 0) (L.map (SMT.const . scoreVarName) pkgvars))
+        SMT.assert slv (translate' pcs')
+        SMT.assert slv (translate' pns')
         putStrLn "Solving ..."
         let loop lower current
               | term lower current = do
@@ -197,19 +211,21 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
 
             putStrLn $ "score: " ++ show score
 
-            pkgassignment <- fmap concat $ forM (M.keys (vPkgs fs)) $ \ pn -> do
+            pkgassignment <- fmap concat $ forM pkgvars $ \ pn -> do
               SMT.Int sver <- SMT.getConst slv (pkgVarName pn)
               if sver /= 0
                 then do
-                  let pi    = idx M.! pn
+                  let pi    = findPackage idx pn
                   let ii    = piTo pi M.! sver
                   let inst  = iiInstance ii
                   return [(pn, inst)]
                 else return []
 
-            flagassignment <- forM (M.keys (vFlags fs)) $ \ gf -> do
-              SMT.Bool b <- SMT.getConst slv (flagVarName gf)
-              return (gf, b)
+            flagassignment <- fmap concat $ forM pkgvars $ \ pn ->
+              forM (piFlags (findPackage idx pn)) $ \ f -> do
+                let gf = GlobalFlag pn f
+                SMT.Bool b <- SMT.getConst slv (flagVarName gf)
+                return (gf, b)
 
             let finalpkgassignment  = M.fromList pkgassignment
             let finalflagassignment = L.foldl' (\ a (gf, b) -> M.insert gf b a) gfa flagassignment
@@ -361,6 +377,27 @@ closure idx = go S.empty
                                     , SPlus pscore rscore
                                     )
 
+closure' :: Index PackageInfo -> SMT.Solver -> [PackageName] -> IO (Set PackageName)
+closure' idx slv pns = do
+    mapM_ (\ c -> SMT.declare slv (pkgVarName c) SMT.tInt) pns
+    go S.empty pns
+  where
+    go :: Set PackageName -> [PackageName] -> IO (Set PackageName)
+    go visited []             = return visited
+    go visited (pn : pns)
+      | pn `S.member` visited = go visited pns
+      | otherwise             = do
+          let pi = findPackage idx pn
+              SDepsFree pcond candidates = packageCondition pn pi
+              newcandidates = nub $ L.filter (\ c -> not (c `S.member` visited || c `elem` (pn : pns))) candidates
+              -- pscore = packageScore pn pi
+              pscore = SMT.List [SMT.const "pkgscorefun", SMT.const (pkgVarName pn)] -- packageScore pn pi
+          mapM_ (\ c -> SMT.declare slv (pkgVarName c) SMT.tInt) newcandidates
+          mapM_ (\ f -> SMT.declare slv (flagVarName (GlobalFlag pn f)) SMT.tBool) (piFlags pi)
+          SMT.assert slv (translate' pcond)
+          SMT.define slv (scoreVarName pn) SMT.tInt pscore
+          go (S.insert pn visited) (pns ++ newcandidates)
+
 --------------------------------------------------------------------------
 -- Solver dependency expressions
 --------------------------------------------------------------------------
@@ -411,6 +448,21 @@ cmb op (SDepsFree d1 pn1) (SDepsFree d2 pn2) = SDepsFree (op d1 d2) (pn1 ++ pn2)
 
 cmb1 :: (SDeps Bool -> SDeps Bool) -> SDepsFree -> SDepsFree
 cmb1 op (SDepsFree d pn) = SDepsFree (op d) pn
+
+translate' :: SDeps a -> SMT.SExpr
+translate' (SBool b)    = SMT.bool b
+translate' (SVer i)     = SMT.int i
+translate' (SScore i)   = SMT.int i
+translate' (SPkg pn)    = SMT.const (pkgVarName pn)
+translate' (SFlag gf)   = SMT.const (flagVarName gf)
+translate' (SEq  d1 d2) = SMT.eq  (translate' d1) (translate' d2)
+translate' (SLe  d1 d2) = SMT.leq (translate' d1) (translate' d2)
+translate' (SGe  d1 d2) = SMT.geq (translate' d1) (translate' d2)
+translate' (SAnd d1 d2) = SMT.and (translate' d1) (translate' d2)
+translate' (SOr  d1 d2) = SMT.or  (translate' d1) (translate' d2)
+translate' (SNot d)     = SMT.not (translate' d)
+translate' (SIte d1 d2 d3) = SMT.ite (translate' d1) (translate' d2) (translate' d3)
+translate' (SPlus d1 d2) = SMT.add (translate' d1) (translate' d2)
 
 translate :: SDeps a -> StateT Vars IO SMT.SExpr
 translate (SBool b)    = return $ SMT.bool b
@@ -464,7 +516,7 @@ processIndexes platform cinfo gfa iidx sidx = result
   where
     combine :: PackageInfo -> PackageInfo -> PackageInfo
     combine (PackageInfo a1 f1 t1 flg1) (PackageInfo a2 _ t2 flg2) =
-      PackageInfo (a1 ++ a2) f1 (M.union t1 t2) (S.union flg1 flg2)
+      PackageInfo (a1 ++ a2) f1 (M.union t1 t2) flg2 -- installed versions only to the left, flags only to the right
 
     result :: Index PackageInfo
     result = M.unionWith combine (processInstalledIndex                    result iidx)
@@ -502,7 +554,7 @@ mkInstalledPackageInfo final idx ipis = pi
     assocs  = zip [-1, -2 ..] (L.map (installedPackage final idx) ipis)
     assocs' = L.map (\ (s, i) -> (instVersion $ iiInstance i, s)) assocs
     rassocs = zip (L.map installedPackageId ipis) [-1, -2 ..]
-    pi      = PackageInfo assocs' (M.fromList rassocs) (M.fromList assocs) S.empty
+    pi      = PackageInfo assocs' (M.fromList rassocs) (M.fromList assocs) []
 
 processSourceIndex :: Platform
                    -> CompilerInfo
@@ -525,7 +577,7 @@ mkSourcePackageInfo platform cinfo gfa final = go . reverse
       where
         assocs  = zipWith (\ sv p -> (sv, sourcePackage platform cinfo gfa final (sourcePackageScore sv) p)) [1 ..] ps
         assocs' = L.map (\ (s, i) -> (instVersion $ iiInstance i, s)) assocs
-        flags   = S.fromList $ L.concatMap (L.map flagName . genPackageFlags . CT.packageDescription) ps
+        flags   = nub $ L.concatMap (L.map flagName . genPackageFlags . CT.packageDescription) ps
         pi      = PackageInfo assocs' M.empty (M.fromList assocs) flags
 
 sourcePackage :: Platform
