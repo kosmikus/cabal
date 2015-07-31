@@ -48,6 +48,12 @@ sourcePackageScore :: SVersion -> Score
 sourcePackageScore 1 = 10
 sourcePackageScore n = 1000 + n * 10
 
+named :: SMT.SExpr -> String -> SMT.SExpr
+named e n = SMT.fun "!" [ e, SMT.const ":named", SMT.const n ]
+
+namedAssert :: SMT.Solver -> String -> SMT.SExpr -> IO ()
+namedAssert slv n e = SMT.assert slv (named e n)
+
 (!@) :: (Ord a, Show a) => Map a b -> a -> b
 m !@ k = case M.lookup k m of
   Nothing -> error $ "!@: " ++ show k ++ " not found"
@@ -134,6 +140,15 @@ sFlag gf = do
       modify (\ s -> s { vFlags = M.insert gf v vs })
       return v
 
+scoreUpperBound :: Integer -> Integer -> String
+scoreUpperBound r n = "score-upper-bound/" ++ show r ++ "/" ++ show n
+
+scoreLowerBound :: Integer -> Integer -> String
+scoreLowerBound r n = "score-lower-bound/" ++ show r ++ "/" ++ show n
+
+pkgCondName :: PackageName -> String
+pkgCondName (PackageName pn) = "cond/" ++ pn
+
 pkgVarName :: PackageName -> String
 pkgVarName (PackageName pn) = "pkg/" ++ pn
 
@@ -147,11 +162,8 @@ externalSMTResolver :: SolverConfig -> DependencyResolver
 externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
   let gfa  = mkGlobalFlagAssignment pcs
       idx  = processIndexes platform cinfo gfa iidx sidx
-      (clocond, closcore) = closure idx pns
       pcs' = packageConstraints idx pcs
       pns' = targets pns
-      tclocond  = translate $ sAnd' [clocond, pcs', pns']
-      tcloscore = translate $ closcore
 
       term _        (Just 0)          = True
       term (Just m) (Just n) | m >= n = True
@@ -163,7 +175,9 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
 
   in  do
         putStrLn "Collecting constraints ..."
-        slv <- SMT.newSolver "z3" ["-smt2", "-nw", "-in"] Nothing
+        -- logger <- SMT.newLogger 0
+        slv <- SMT.newSolver "z3" ["-smt2", "-nw", "-in"] Nothing -- (Just logger)
+        SMT.setOption slv ":produce-unsat-cores" "true"
         SMT.defineFun slv "pkgscorefun" [("v", SMT.tInt)] SMT.tInt $
           SMT.ite
             (SMT.eq (SMT.const "v") (SMT.int 0))
@@ -177,34 +191,34 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
                   (SMT.add (SMT.int 1000) (SMT.mul (SMT.const "v") (SMT.int 10)))))
         pkgvars <- fmap S.toList $ closure' idx slv pns
         scorevar <- SMT.define slv "score" SMT.tInt (L.foldl' SMT.add (SMT.int 0) (L.map (SMT.const . scoreVarName) pkgvars))
-        SMT.assert slv (translate' pcs')
-        SMT.assert slv (translate' pns')
+        namedAssert slv "package-constraints" (translate' pcs')
+        namedAssert slv "targets"             (translate' pns')
         putStrLn "Solving ..."
-        let loop lower current
+        let loop n lower current
               | term lower current = do
                   case current of
                     Nothing -> return ()
-                    Just n  -> SMT.assert slv (SMT.leq scorevar (SMT.int n))
+                    Just n  -> namedAssert slv "final-score-upper-bound" (SMT.leq scorevar (SMT.int n))
                   SMT.check slv
               | otherwise = do
                   let middle = mid lower current
                   SMT.push slv
-                  maybe (return ()) (\ c -> SMT.assert slv (SMT.lt  scorevar (SMT.int c))) middle
-                  maybe (return ()) (\ c -> SMT.assert slv (SMT.geq scorevar (SMT.int c))) lower
+                  maybe (return ()) (\ c -> namedAssert slv (scoreUpperBound n c) (SMT.lt  scorevar (SMT.int c))) middle
+                  maybe (return ()) (\ c -> namedAssert slv (scoreLowerBound n c) (SMT.geq scorevar (SMT.int c))) lower
                   r <- SMT.check slv
                   case r of
                     SMT.Sat -> do
                       SMT.Int score <- SMT.getConst slv "score"
                       putStrLn $ "score: " ++ show score
-                      loop lower (Just score)
-                    SMT.Unsat -> do
-                      SMT.pop slv
+                      loop (n + 1) lower (Just score)
+                    _ -> do
                       case middle of
                         Nothing -> return r
                         Just l  -> do
+                          SMT.pop slv
                           putStrLn $ "lower: " ++ show l
-                          loop middle current
-        r <- loop Nothing Nothing
+                          loop (n + 1) middle current
+        r <- loop 0 Nothing Nothing
         case r of
           SMT.Sat -> do
             SMT.Int score <- SMT.getConst slv "score"
@@ -230,9 +244,6 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
             let finalpkgassignment  = M.fromList pkgassignment
             let finalflagassignment = L.foldl' (\ a (gf, b) -> M.insert gf b a) gfa flagassignment
 
-            -- print pkgassignment
-            -- print flagassignment
-
             let plan = flip L.map pkgassignment $ \ (pn, i) ->
                   let pinst = PackageInstance pn i
                   in  case convPackageInstance pinst of
@@ -255,7 +266,17 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
                                )
 
             return (Done plan)
+          SMT.Unsat -> do
+            res <- SMT.command slv $ SMT.List [ SMT.Atom "get-unsat-core" ]
+            return (Fail (incompatiblePackages res))
           _   -> return (Fail (show r))
+
+incompatiblePackages :: SMT.SExpr -> String
+incompatiblePackages (SMT.Atom a)  = "There was an unknown error: " ++ show a
+incompatiblePackages (SMT.List xs) =
+     "There is no solution.\n"
+  ++ "There is an incompatibility involving the following packages:\n"
+  ++ unlines [ drop 5 x | SMT.Atom x <- xs, "cond/" `isPrefixOf` x ]
 
 postProcessCondTree :: Platform
                     -> CompilerInfo
@@ -394,8 +415,8 @@ closure' idx slv pns = do
               pscore = SMT.List [SMT.const "pkgscorefun", SMT.const (pkgVarName pn)] -- packageScore pn pi
           mapM_ (\ c -> SMT.declare slv (pkgVarName c) SMT.tInt) newcandidates
           mapM_ (\ f -> SMT.declare slv (flagVarName (GlobalFlag pn f)) SMT.tBool) (piFlags pi)
-          SMT.assert slv (translate' pcond)
-          SMT.define slv (scoreVarName pn) SMT.tInt pscore
+          namedAssert slv (pkgCondName pn) (translate' pcond)
+          SMT.define  slv (scoreVarName pn) SMT.tInt pscore
           go (S.insert pn visited) (pns ++ newcandidates)
 
 --------------------------------------------------------------------------
@@ -463,21 +484,6 @@ translate' (SOr  d1 d2) = SMT.or  (translate' d1) (translate' d2)
 translate' (SNot d)     = SMT.not (translate' d)
 translate' (SIte d1 d2 d3) = SMT.ite (translate' d1) (translate' d2) (translate' d3)
 translate' (SPlus d1 d2) = SMT.add (translate' d1) (translate' d2)
-
-translate :: SDeps a -> StateT Vars IO SMT.SExpr
-translate (SBool b)    = return $ SMT.bool b
-translate (SVer i)     = return $ SMT.int i
-translate (SScore i)   = return $ SMT.int i
-translate (SPkg pn)    = sPkg  pn
-translate (SFlag gf)   = sFlag gf
-translate (SEq  d1 d2) = liftM2 SMT.eq  (translate d1) (translate d2)
-translate (SLe  d1 d2) = liftM2 SMT.leq (translate d1) (translate d2)
-translate (SGe  d1 d2) = liftM2 SMT.geq (translate d1) (translate d2)
-translate (SAnd d1 d2) = liftM2 SMT.and (translate d1) (translate d2)
-translate (SOr  d1 d2) = liftM2 SMT.or  (translate d1) (translate d2)
-translate (SNot d)     = liftM  SMT.not (translate d)
-translate (SIte d1 d2 d3) = liftM3 SMT.ite (translate d1) (translate d2) (translate d3)
-translate (SPlus d1 d2) = liftM2 SMT.add (translate d1) (translate d2)
 
 freePkgs :: SDeps a -> [PackageName]
 freePkgs (SPkg pn)    = [pn]
