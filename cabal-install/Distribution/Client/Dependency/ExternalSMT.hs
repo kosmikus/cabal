@@ -160,8 +160,9 @@ flagVarName (GlobalFlag (PackageName pn) (FlagName fn)) = "flag/" ++ pn ++ "/" +
 
 externalSMTResolver :: SolverConfig -> DependencyResolver
 externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
-  let gfa  = mkGlobalFlagAssignment pcs
-      idx  = processIndexes platform cinfo gfa iidx sidx
+  let gfa  = mkGlobalFlagAssignment   pcs
+      gsa  = mkGlobalStanzaAssignment pcs
+      idx  = processIndexes platform cinfo gfa gsa iidx sidx
       pcs' = packageConstraints idx pcs
       pns' = targets pns
 
@@ -254,16 +255,19 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
                           in  PreExisting $ InstalledPackage ipi deps
                         Right pid ->
                           let sp = fromJust $ CI.lookupPackageId sidx pid
-                              GenericPackageDescription pkg flags libs exes _tests _benchs = CT.packageDescription sp
+                              GenericPackageDescription pkg flags libs exes tests benchs = CT.packageDescription sp
                               fa = postProcessFlags finalflagassignment pn flags
+                              ss = M.findWithDefault [] pn gsa
                               conv :: CondTree ConfVar [Dependency] a -> [ConfiguredId]
                               conv = postProcessCondTree platform cinfo finalpkgassignment pn (M.fromList fa)
                           in Configured  $ ConfiguredPackage
                                sp
                                fa
-                               []  -- TODO: treat test and bench
+                               ss
                                (  fromLibraryDeps (maybe [] conv libs)
-                               <> CD.fromList (L.map (\ (exe, ct) -> (ComponentExe exe, conv ct)) exes)
+                               <> CD.fromList                   (L.map (\ (e, ct) -> (ComponentExe   e, conv ct)) exes  )
+                               <> CD.fromList (testsEnabled  ss (L.map (\ (t, ct) -> (ComponentTest  t, conv ct)) tests ))
+                               <> CD.fromList (benchsEnabled ss (L.map (\ (b, ct) -> (ComponentBench b, conv ct)) benchs))
                                )
 
             return (Done plan)
@@ -271,6 +275,10 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
             res <- SMT.command slv $ SMT.List [ SMT.Atom "get-unsat-core" ]
             return (Fail (incompatiblePackages res))
           _   -> return (Fail (show r))
+
+testsEnabled  ss xs = if TestStanzas  `elem` ss then xs else []
+benchsEnabled ss xs = if BenchStanzas `elem` ss then xs else []
+
 
 incompatiblePackages :: SMT.SExpr -> String
 incompatiblePackages (SMT.Atom a)  = "There was an unknown error: " ++ show a
@@ -382,6 +390,12 @@ mkGlobalFlagAssignment = M.fromList . L.concatMap go
   where
     go (PackageConstraintFlags pn fa) = L.map (\ (fn, b) -> (GlobalFlag pn fn, b)) fa
     go _                              = []
+
+mkGlobalStanzaAssignment :: [PackageConstraint] -> Map PackageName [OptionalStanza]
+mkGlobalStanzaAssignment = M.fromList . L.concatMap go
+  where
+    go (PackageConstraintStanzas pn ss) = [(pn, ss)]
+    go _                                = []
 
 closure :: Index PackageInfo -> [PackageName] -> (SDeps Bool, SDeps Integer)
 closure idx = go S.empty
@@ -516,18 +530,19 @@ packageScore pn pi = sCase (L.map (\ (sv, i) -> (SEq (SPkg pn) (SVer sv), SScore
 processIndexes :: Platform
                -> CompilerInfo
                -> Map GlobalFlag Bool
+               -> Map PackageName [OptionalStanza]
                -> SI.InstalledPackageIndex
                -> CI.PackageIndex SourcePackage
                -> Index PackageInfo
-processIndexes platform cinfo gfa iidx sidx = result
+processIndexes platform cinfo gfa gsa iidx sidx = result
   where
     combine :: PackageInfo -> PackageInfo -> PackageInfo
     combine (PackageInfo a1 f1 t1 flg1) (PackageInfo a2 _ t2 flg2) =
       PackageInfo (a1 ++ a2) f1 (M.union t1 t2) flg2 -- installed versions only to the left, flags only to the right
 
     result :: Index PackageInfo
-    result = M.unionWith combine (processInstalledIndex                    result iidx)
-                                 (processSourceIndex    platform cinfo gfa result sidx)
+    result = M.unionWith combine (processInstalledIndex                        result iidx)
+                                 (processSourceIndex    platform cinfo gfa gsa result sidx)
 
 processInstalledIndex :: Index PackageInfo -> SI.InstalledPackageIndex -> Index PackageInfo
 processInstalledIndex final idx =
@@ -566,23 +581,25 @@ mkInstalledPackageInfo final idx ipis = pi
 processSourceIndex :: Platform
                    -> CompilerInfo
                    -> Map GlobalFlag Bool
+                   -> Map PackageName [OptionalStanza]
                    -> Index PackageInfo -> CI.PackageIndex SourcePackage -> Index PackageInfo
-processSourceIndex platform cinfo gfa final idx =
-  M.fromList $ L.map (mkSourcePackageInfo platform cinfo gfa final)
+processSourceIndex platform cinfo gfa gsa final idx =
+  M.fromList $ L.map (mkSourcePackageInfo platform cinfo gfa gsa final)
                      (CI.allPackagesByName idx)
 
 mkSourcePackageInfo :: Platform
                     -> CompilerInfo
                     -> Map GlobalFlag Bool
+                    -> Map PackageName [OptionalStanza]
                     -> Index PackageInfo
                     -> [SourcePackage]
                     -> (PackageName, PackageInfo)
-mkSourcePackageInfo platform cinfo gfa final = go . reverse
+mkSourcePackageInfo platform cinfo gfa gsa final = go . reverse -- reverse for assigning the lowest score to the latest versions
   where
     go []           = error "mkSourcePackageInfo: internal error, empty list"
     go ps @ (p : _) = (pkgName $ packageInfoId p, pi)
       where
-        assocs  = zipWith (\ sv p -> (sv, sourcePackage platform cinfo gfa final (sourcePackageScore sv) p)) [1 ..] ps
+        assocs  = zipWith (\ sv p -> (sv, sourcePackage platform cinfo gfa gsa final (sourcePackageScore sv) p)) [1 ..] ps
         assocs' = L.map (\ (s, i) -> (instVersion $ iiInstance i, s)) assocs
         flags   = nub $ L.concatMap (L.map flagName . genPackageFlags . CT.packageDescription) ps
         pi      = PackageInfo assocs' M.empty (M.fromList assocs) flags
@@ -590,20 +607,24 @@ mkSourcePackageInfo platform cinfo gfa final = go . reverse
 sourcePackage :: Platform
               -> CompilerInfo
               -> Map GlobalFlag Bool
+              -> Map PackageName [OptionalStanza]
               -> Index PackageInfo
               -> Score
               -> SourcePackage
               -> InstanceInfo
-sourcePackage platform cinfo gfa final score sp = InstanceInfo score inst deps
+sourcePackage platform cinfo gfa gsa final score sp = InstanceInfo score inst deps
   where
-    GenericPackageDescription pkg flags libs exes _tests _benchs = CT.packageDescription sp
+    GenericPackageDescription pkg flags libs exes tests benchs = CT.packageDescription sp
     pn   = pkgName (package pkg)
     inst = Instance (pkgVersion $ packageInfoId sp) Source
+    ss   = M.findWithDefault [] pn gsa
 
     conv :: CondTree ConfVar [Dependency] a -> SDepsFree
     conv = processCondTree platform cinfo final gfa flags pn
-    -- TODO: Handle components properly
-    deps = sAnd (maybe (SDepsFree (SBool True) []) conv libs : L.map (conv . snd) exes)
+    deps = sAnd $  maybe (SDepsFree (SBool True) []) conv        libs
+                :                             L.map (conv . snd) exes
+                ++ testsEnabled  ss          (L.map (conv . snd) tests)
+                ++ benchsEnabled ss          (L.map (conv . snd) benchs)
 
 processCondTree :: Platform
                 -> CompilerInfo
