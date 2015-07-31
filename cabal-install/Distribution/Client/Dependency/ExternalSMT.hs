@@ -179,6 +179,7 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
         slv <- SMT.newSolver "z3" ["-smt2", "-nw", "-in"] Nothing -- (Just logger)
         SMT.setOption slv ":produce-unsat-cores" "true"
         SMT.defineFun slv "pkgscorefun" [("v", SMT.tInt)] SMT.tInt $
+          -- inline version of the package scoring function; turns out to be faster
           SMT.ite
             (SMT.eq (SMT.const "v") (SMT.int 0))
               (SMT.int 0)
