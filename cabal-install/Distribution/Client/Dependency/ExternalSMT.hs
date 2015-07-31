@@ -42,8 +42,9 @@ type Score = Integer
 installedPackageScore :: Score
 installedPackageScore = 1
 
-sourcePackageScore :: Score
-sourcePackageScore = 10
+sourcePackageScore :: SVersion -> Score
+sourcePackageScore 1 = 10
+sourcePackageScore n = 1000 + n * 10
 
 (!@) :: (Ord a, Show a) => Map a b -> a -> b
 m !@ k = case M.lookup k m of
@@ -153,8 +154,9 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
         putStrLn "Transferring to z3 ..."
         scorevar <- SMT.define slv "score" SMT.tInt sscore
         SMT.assert slv scond
+        SMT.push slv
         putStrLn "Solving ..."
-        let loop = do
+        let loop current = do
               r <- SMT.check slv
               case r of
                 SMT.Sat -> do
@@ -162,11 +164,14 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
                   putStrLn $ "score: " ++ show score
                   SMT.push slv
                   SMT.assert slv (SMT.lt scorevar (SMT.int score))
-                  loop
+                  loop (Just score)
                 SMT.Unsat -> do
                   SMT.pop slv
+                  case current of
+                    Nothing -> return ()
+                    Just n  -> SMT.assert slv (SMT.leq scorevar (SMT.int n))
                   SMT.check slv
-        r <- loop
+        r <- loop Nothing
         case r of
           SMT.Sat -> do
             SMT.Int score <- SMT.getConst slv "score"
@@ -494,12 +499,12 @@ mkSourcePackageInfo :: Platform
                     -> Index PackageInfo
                     -> [SourcePackage]
                     -> (PackageName, PackageInfo)
-mkSourcePackageInfo platform cinfo gfa final = go
+mkSourcePackageInfo platform cinfo gfa final = go . reverse
   where
     go []           = error "mkSourcePackageInfo: internal error, empty list"
     go ps @ (p : _) = (pkgName $ packageInfoId p, pi)
       where
-        assocs  = zip [1 ..] (L.map (sourcePackage platform cinfo gfa final) ps)
+        assocs  = zipWith (\ sv p -> (sv, sourcePackage platform cinfo gfa final (sourcePackageScore sv) p)) [1 ..] ps
         assocs' = L.map (\ (s, i) -> (instVersion $ iiInstance i, s)) assocs
         flags   = S.fromList $ L.concatMap (L.map flagName . genPackageFlags . CT.packageDescription) ps
         pi      = PackageInfo assocs' M.empty (M.fromList assocs) flags
@@ -508,9 +513,10 @@ sourcePackage :: Platform
               -> CompilerInfo
               -> Map GlobalFlag Bool
               -> Index PackageInfo
+              -> Score
               -> SourcePackage
               -> InstanceInfo
-sourcePackage platform cinfo gfa final sp = InstanceInfo sourcePackageScore inst deps
+sourcePackage platform cinfo gfa final score sp = InstanceInfo score inst deps
   where
     GenericPackageDescription pkg flags libs exes _tests _benchs = CT.packageDescription sp
     pn   = pkgName (package pkg)
