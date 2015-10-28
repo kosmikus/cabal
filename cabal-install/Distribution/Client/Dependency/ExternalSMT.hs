@@ -175,7 +175,7 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
       mid (Just m) (Just n) = Just (((m + n) `div` 2) + 1)
 
   in  do
-        putStrLn "Collecting constraints ..."
+        -- putStrLn "Collecting constraints ..."
         -- logger <- SMT.newLogger 0
         slv <- SMT.newSolver "z3" ["-smt2", "-nw", "-in"] Nothing -- (Just logger)
         SMT.setOption slv ":produce-unsat-cores" "true"
@@ -195,7 +195,7 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
         scorevar <- SMT.define slv "score" SMT.tInt (L.foldl' SMT.add (SMT.int 0) (L.map (SMT.const . scoreVarName) pkgvars))
         namedAssert slv "package-constraints" (translate' pcs')
         namedAssert slv "targets"             (translate' pns')
-        putStrLn "Solving ..."
+        -- putStrLn "Solving ..."
         let loop n lower current
               | term lower current = do
                   case current of
@@ -211,21 +211,21 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
                   case r of
                     SMT.Sat -> do
                       SMT.Int score <- SMT.getConst slv "score"
-                      putStrLn $ "score: " ++ show score
+                      -- putStrLn $ "score: " ++ show score
                       loop (n + 1) lower (Just score)
                     _ -> do
                       case middle of
                         Nothing -> return r
                         Just l  -> do
                           SMT.pop slv
-                          putStrLn $ "lower: " ++ show l
+                          -- putStrLn $ "lower: " ++ show l
                           loop (n + 1) middle current
         r <- loop 0 Nothing Nothing
         case r of
           SMT.Sat -> do
             SMT.Int score <- SMT.getConst slv "score"
 
-            putStrLn $ "score: " ++ show score
+            -- putStrLn $ "score: " ++ show score
 
             pkgassignment <- fmap concat $ forM pkgvars $ \ pn -> do
               SMT.Int sver <- SMT.getConst slv (pkgVarName pn)
