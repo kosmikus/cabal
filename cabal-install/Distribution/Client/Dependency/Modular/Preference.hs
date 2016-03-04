@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# OPTIONS_GHC -ddump-rule-firings #-}
 module Distribution.Client.Dependency.Modular.Preference
     ( avoidReinstalls
     , deferSetupChoices
@@ -44,6 +45,7 @@ import Distribution.Client.Dependency.Modular.Version
 
 -- | Generic abstraction for strategies that just rearrange the package order.
 -- Only packages that match the given predicate are reordered.
+{-# INLINE packageOrderFor #-}
 packageOrderFor :: (PN -> Bool) -> (PN -> I -> I -> Ordering) -> Tree a -> Tree a
 packageOrderFor p cmp' = trav go
   where
@@ -56,6 +58,7 @@ packageOrderFor p cmp' = trav go
     cmp pn (POption i _) (POption i' _) = cmp' pn i i'
 
 -- | Prefer to link packages whenever possible
+{-# INLINE preferLinked #-}
 preferLinked :: Tree a -> Tree a
 preferLinked = trav go
   where
@@ -79,6 +82,7 @@ preferredVersionsOrdering vrs v1 v2 = compare (check v1) (check v2)
 
 -- | Traversal that tries to establish package preferences (not constraints).
 -- Works by reordering choice nodes. Also applies stanza preferences.
+{-# INLINE preferPackagePreferences #-}
 preferPackagePreferences :: (PN -> PackagePreferences) -> Tree a -> Tree a
 preferPackagePreferences pcs = preferPackageStanzaPreferences pcs
                              . packageOrderFor (const True) preference
@@ -109,6 +113,7 @@ preferLatestOrdering (I v1 _) (I v2 _) = compare v1 v2
 
 -- | Traversal that tries to establish package stanza enable\/disable
 -- preferences. Works by reordering the branches of stanza choices.
+{-# INLINE preferPackageStanzaPreferences #-}
 preferPackageStanzaPreferences :: (PN -> PackagePreferences) -> Tree a -> Tree a
 preferPackageStanzaPreferences pcs = trav go
   where
@@ -188,6 +193,7 @@ processPackageConstraintS s c b' (LabeledPackageConstraint pc src) r = go pc
 -- | Traversal that tries to establish various kinds of user constraints. Works
 -- by selectively disabling choices that have been ruled out by global user
 -- constraints.
+{-# INLINE enforcePackageConstraints #-}
 enforcePackageConstraints :: M.Map PN [LabeledPackageConstraint]
                           -> Tree QGoalReasonChain
                           -> Tree QGoalReasonChain
@@ -218,6 +224,7 @@ enforcePackageConstraints pcs = trav go
 -- be run after user preferences have been enforced. For manual flags,
 -- it checks if a user choice has been made. If not, it disables all but
 -- the first choice.
+{-# INLINE enforceManualFlags #-}
 enforceManualFlags :: Tree QGoalReasonChain -> Tree QGoalReasonChain
 enforceManualFlags = trav go
   where
@@ -232,6 +239,7 @@ enforceManualFlags = trav go
     go x                                                   = x
 
 -- | Require installed packages.
+{-# INLINE requireInstalled #-}
 requireInstalled :: (PN -> Bool) -> Tree QGoalReasonChain -> Tree QGoalReasonChain
 requireInstalled p = trav go
   where
@@ -256,6 +264,7 @@ requireInstalled p = trav go
 -- they are, perhaps this should just result in trying to reinstall those other
 -- packages as well. However, doing this all neatly in one pass would require to
 -- change the builder, or at least to change the goal set after building.
+{-# INLINE avoidReinstalls #-}
 avoidReinstalls :: (PN -> Bool) -> Tree QGoalReasonChain -> Tree QGoalReasonChain
 avoidReinstalls p = trav go
   where
@@ -279,6 +288,7 @@ avoidReinstalls p = trav go
 -- This is unnecessary for the default search strategy, because
 -- it descends only into the first goal choice anyway,
 -- but may still make sense to just reduce the tree size a bit.
+{-# INLINE firstGoal #-}
 firstGoal :: Tree a -> Tree a
 firstGoal = trav go
   where
@@ -289,6 +299,7 @@ firstGoal = trav go
 -- | Transformation that tries to make a decision on base as early as
 -- possible. In nearly all cases, there's a single choice for the base
 -- package. Also, fixing base early should lead to better error messages.
+{-# INLINE preferBaseGoalChoice #-}
 preferBaseGoalChoice :: Tree a -> Tree a
 preferBaseGoalChoice = trav go
   where
@@ -301,6 +312,7 @@ preferBaseGoalChoice = trav go
 
 -- | Deal with setup dependencies after regular dependencies, so that we can
 -- will link setup depencencies against package dependencies when possible
+{-# INLINE deferSetupChoices #-}
 deferSetupChoices :: Tree a -> Tree a
 deferSetupChoices = trav go
   where
@@ -314,6 +326,7 @@ deferSetupChoices = trav go
 -- | Transformation that tries to avoid making weak flag choices early.
 -- Weak flags are trivial flags (not influencing dependencies) or such
 -- flags that are explicitly declared to be weak in the index.
+{-# INLINE deferWeakFlagChoices #-}
 deferWeakFlagChoices :: Tree a -> Tree a
 deferWeakFlagChoices = trav go
   where
@@ -338,6 +351,7 @@ deferWeakFlagChoices = trav go
 --
 -- Returns at most one choice.
 --
+{-# INLINE preferEasyGoalChoices #-}
 preferEasyGoalChoices :: Tree a -> Tree a
 preferEasyGoalChoices = trav go
   where
@@ -351,6 +365,7 @@ preferEasyGoalChoices = trav go
 -- 'preferEasyGoalChoices', this may return more than one
 -- choice.
 --
+{-# INLINE preferReallyEasyGoalChoices #-}
 preferReallyEasyGoalChoices :: Tree a -> Tree a
 preferReallyEasyGoalChoices = trav go
   where

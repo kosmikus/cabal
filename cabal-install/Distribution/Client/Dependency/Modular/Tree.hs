@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveFunctor, DeriveFoldable, DeriveTraversable #-}
+{-# LANGUAGE DeriveFunctor, DeriveFoldable, DeriveTraversable, RankNTypes #-}
 module Distribution.Client.Dependency.Modular.Tree
     ( FailReason(..)
     , POption(..)
@@ -157,6 +157,13 @@ zeroOrOneChoices (Fail       _ _       ) = True
 cata :: (TreeF a b -> b) -> Tree a -> b
 cata phi x = (phi . fmap (cata phi) . out) x
 
+-- TODO: The rewrite rule trav/trav seems to work in practice, but it is
+-- not actually correct unless psi2 satisfies additional side conditions.
+-- So the rewrite rule as given is quite unsafe. We have to check more
+-- carefully what we can do, or probably better manually fuse the steps.
+--
+{-# RULES "trav/trav" forall psi1 psi2 x . trav psi1 (trav psi2 x) = trav (psi1 . psi2) x #-}
+{-# INLINE[1] trav #-}
 trav :: (TreeF a (Tree b) -> TreeF b (Tree b)) -> Tree a -> Tree b
 trav psi x = cata (inn . psi) x
 

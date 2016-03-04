@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -ddump-rule-firings #-}
 module Distribution.Client.Dependency.Modular.Solver
     ( SolverConfig(..)
     , solve
