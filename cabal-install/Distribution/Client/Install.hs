@@ -292,7 +292,7 @@ makeInstallPlan verbosity
     solver <- chooseSolver verbosity (fromFlag (configSolver configExFlags))
               (compilerInfo comp)
     notice verbosity "Resolving dependencies..."
-    planPackages comp platform mSandboxPkgInfo solver
+    planPackages comp platform verbosity mSandboxPkgInfo solver
       configFlags configExFlags installFlags
       installedPkgIndex sourcePkgDb pkgSpecifiers
 
@@ -321,6 +321,7 @@ processInstallPlan verbosity
 
 planPackages :: Compiler
              -> Platform
+             -> Verbosity
              -> Maybe SandboxPackageInfo
              -> Solver
              -> ConfigFlags
@@ -330,11 +331,12 @@ planPackages :: Compiler
              -> SourcePackageDb
              -> [PackageSpecifier SourcePackage]
              -> IO (Progress String String InstallPlan)
-planPackages comp platform mSandboxPkgInfo solver
+planPackages comp platform verbosity mSandboxPkgInfo solver
              configFlags configExFlags installFlags
              installedPkgIndex sourcePkgDb pkgSpecifiers = do
     progress <- resolveDependencies
                   platform (compilerInfo comp)
+                  verbosity
                   solver
                   resolverParams
     return (progress >>=

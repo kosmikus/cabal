@@ -8,8 +8,6 @@ import Data.Function
 import Data.Monoid
 
 import Distribution.Client.ComponentDeps as CD
-import Distribution.Client.Dependency.Modular.Solver
-  ( SolverConfig(..) )
 import Distribution.Client.Dependency.Types
 import Distribution.System
   ( Platform(..) )
@@ -23,6 +21,7 @@ import Distribution.Client.PackageIndex as CI
 import Distribution.Compiler
   ( CompilerInfo(..),
     CompilerId(..) )
+import Distribution.Simple.Utils (debug, info)
 import Distribution.Version
 import Distribution.Text
 
@@ -159,7 +158,7 @@ flagVarName :: GlobalFlag -> String
 flagVarName (GlobalFlag (PackageName pn) (FlagName fn)) = "flag/" ++ pn ++ "/" ++ fn
 
 externalSMTResolver :: SolverConfig -> DependencyResolver
-externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
+externalSMTResolver (SolverConfig { solverVerbosity = verbosity, scoring = scoring }) platform cinfo iidx sidx _pprefs pcs pns =
   let gfa  = mkGlobalFlagAssignment   pcs
       gsa  = mkGlobalStanzaAssignment pcs
       idx  = processIndexes platform cinfo gfa gsa iidx sidx
@@ -175,7 +174,7 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
       mid (Just m) (Just n) = Just (((m + n) `div` 2) + 1)
 
   in  do
-        -- putStrLn "Collecting constraints ..."
+        debug verbosity "Collecting constraints ..."
         -- logger <- SMT.newLogger 0
         slv <- SMT.newSolver "z3" ["-smt2", "-nw", "-in"] Nothing -- (Just logger)
         SMT.setOption slv ":produce-unsat-cores" "true"
@@ -195,7 +194,7 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
         scorevar <- SMT.define slv "score" SMT.tInt (L.foldl' SMT.add (SMT.int 0) (L.map (SMT.const . scoreVarName) pkgvars))
         namedAssert slv "package-constraints" (translate' pcs')
         namedAssert slv "targets"             (translate' pns')
-        -- putStrLn "Solving ..."
+        debug verbosity "Solving ..."
         let loop n lower current
               | term lower current = do
                   case current of
@@ -211,21 +210,21 @@ externalSMTResolver _sc platform cinfo iidx sidx _pprefs pcs pns =
                   case r of
                     SMT.Sat -> do
                       SMT.Int score <- SMT.getConst slv "score"
-                      -- putStrLn $ "score: " ++ show score
+                      debug verbosity $ "score: " ++ show score
                       loop (n + 1) lower (Just score)
                     _ -> do
                       case middle of
                         Nothing -> return r
                         Just l  -> do
                           SMT.pop slv
-                          -- putStrLn $ "lower: " ++ show l
+                          debug verbosity $ "lower: " ++ show l
                           loop (n + 1) middle current
         r <- loop 0 Nothing Nothing
         case r of
           SMT.Sat -> do
             SMT.Int score <- SMT.getConst slv "score"
 
-            -- putStrLn $ "score: " ++ show score
+            info verbosity $ "final score: " ++ show score
 
             pkgassignment <- fmap concat $ forM pkgvars $ \ pn -> do
               SMT.Int sver <- SMT.getConst slv (pkgVarName pn)

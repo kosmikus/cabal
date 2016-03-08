@@ -512,22 +512,23 @@ runSolver ExternalSMT = externalSMTResolver
 --
 resolveDependencies :: Platform
                     -> CompilerInfo
+                    -> Verbosity
                     -> Solver
                     -> DepResolverParams
                     -> IO (Progress String String InstallPlan)
 
     --TODO: is this needed here? see dontUpgradeNonUpgradeablePackages
-resolveDependencies platform comp _solver params
+resolveDependencies platform comp _verbosity _solver params
   | null (depResolverTargets params)
   = return (return (mkInstallPlan platform comp (depResolverIndependentGoals params) []))
 
-resolveDependencies platform comp  solver params =
+resolveDependencies platform comp verbosity solver params =
 
     fmap ( Step (debugDepResolverParams finalparams)
          . fmap (mkInstallPlan platform comp indGoals)
          )
   $ runSolver solver (SolverConfig reorderGoals indGoals noReinstalls
-                      shadowing strFlags maxBkjumps)
+                      shadowing strFlags maxBkjumps True verbosity )
                      platform comp installedPkgIndex sourcePkgIndex
                      preferences constraints targets
   where

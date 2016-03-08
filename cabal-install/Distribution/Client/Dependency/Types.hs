@@ -70,6 +70,8 @@ import Distribution.System
          ( Platform )
 import Distribution.Text
          ( Text(..), display )
+import Distribution.Verbosity
+         ( Verbosity )
 
 import Text.PrettyPrint
          ( text )
@@ -228,14 +230,16 @@ isAllowNewer AllowNewerNone     = False
 isAllowNewer (AllowNewerSome _) = True
 isAllowNewer AllowNewerAll      = True
 
--- | Various options for the modular solver.
+-- | Various options for the modular and externalsmt solvers.
 data SolverConfig = SolverConfig {
   preferEasyGoalChoices :: Bool,
   independentGoals      :: Bool,
   avoidReinstalls       :: Bool,
   shadowPkgs            :: Bool,
   strongFlags           :: Bool,
-  maxBackjumps          :: Maybe Int
+  maxBackjumps          :: Maybe Int,
+  scoring               :: Bool,
+  solverVerbosity       :: Verbosity
 }
 
 -- | A type to represent the unfolding of an expensive long running

@@ -131,6 +131,7 @@ planPackages verbosity comp platform fetchFlags
       notice verbosity "Resolving dependencies..."
       progress <- resolveDependencies
                     platform (compilerInfo comp)
+                    verbosity
                     solver
                     resolverParams
       installPlan <- foldProgress logMsg die return progress
