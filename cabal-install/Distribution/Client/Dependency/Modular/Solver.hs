@@ -16,16 +16,6 @@ import qualified Distribution.Client.Dependency.Modular.Preference as P
 import Distribution.Client.Dependency.Modular.Validate
 import Distribution.Client.Dependency.Modular.Linking
 
--- | Various options for the modular solver.
-data SolverConfig = SolverConfig {
-  preferEasyGoalChoices :: Bool,
-  independentGoals      :: Bool,
-  avoidReinstalls       :: Bool,
-  shadowPkgs            :: Bool,
-  strongFlags           :: Bool,
-  maxBackjumps          :: Maybe Int
-}
-
 solve :: SolverConfig ->   -- solver parameters
          Index ->          -- all available packages as an index
          (PN -> PackagePreferences) -> -- preferences

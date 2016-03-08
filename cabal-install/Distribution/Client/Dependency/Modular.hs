@@ -24,9 +24,9 @@ import Distribution.Client.Dependency.Modular.Log
 import Distribution.Client.Dependency.Modular.Package
          ( PN )
 import Distribution.Client.Dependency.Modular.Solver
-         ( SolverConfig(..), solve )
+         ( solve )
 import Distribution.Client.Dependency.Types
-         ( DependencyResolver, PackageConstraint(..) )
+         ( DependencyResolver, PackageConstraint(..), SolverConfig(..) )
 import Distribution.Client.InstallPlan
          ( PlanPackage )
 import Distribution.System

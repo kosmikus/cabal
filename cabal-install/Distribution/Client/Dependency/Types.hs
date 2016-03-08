@@ -19,6 +19,8 @@ module Distribution.Client.Dependency.Types (
     Solver(..),
     DependencyResolver,
 
+    SolverConfig(..),
+
     AllowNewer(..), isAllowNewer,
     PackageConstraint(..),
     debugPackageConstraint,
@@ -225,6 +227,16 @@ isAllowNewer :: AllowNewer -> Bool
 isAllowNewer AllowNewerNone     = False
 isAllowNewer (AllowNewerSome _) = True
 isAllowNewer AllowNewerAll      = True
+
+-- | Various options for the modular solver.
+data SolverConfig = SolverConfig {
+  preferEasyGoalChoices :: Bool,
+  independentGoals      :: Bool,
+  avoidReinstalls       :: Bool,
+  shadowPkgs            :: Bool,
+  strongFlags           :: Bool,
+  maxBackjumps          :: Maybe Int
+}
 
 -- | A type to represent the unfolding of an expensive long running
 -- calculation that may fail. We may get intermediate steps before the final
