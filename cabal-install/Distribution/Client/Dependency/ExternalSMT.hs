@@ -158,7 +158,7 @@ flagVarName :: GlobalFlag -> String
 flagVarName (GlobalFlag (PackageName pn) (FlagName fn)) = "flag/" ++ pn ++ "/" ++ fn
 
 externalSMTResolver :: SolverConfig -> DependencyResolver
-externalSMTResolver (SolverConfig { solverVerbosity = verbosity, scoring = scoring }) platform cinfo iidx sidx _pprefs pcs pns =
+externalSMTResolver (SolverConfig { solverVerbosity = verbosity, scoring = _score }) platform cinfo iidx sidx _pprefs pcs pns =
   let gfa  = mkGlobalFlagAssignment   pcs
       gsa  = mkGlobalStanzaAssignment pcs
       idx  = processIndexes platform cinfo gfa gsa iidx sidx
@@ -178,7 +178,7 @@ externalSMTResolver (SolverConfig { solverVerbosity = verbosity, scoring = scori
         -- logger <- SMT.newLogger 0
         slv <- SMT.newSolver "z3" ["-smt2", "-nw", "-in"] Nothing -- (Just logger)
         SMT.setOption slv ":produce-unsat-cores" "true"
-        SMT.defineFun slv "pkgscorefun" [("v", SMT.tInt)] SMT.tInt $
+        _ <- SMT.defineFun slv "pkgscorefun" [("v", SMT.tInt)] SMT.tInt $
           -- inline version of the package scoring function; turns out to be faster
           SMT.ite
             (SMT.eq (SMT.const "v") (SMT.int 0))
@@ -199,7 +199,7 @@ externalSMTResolver (SolverConfig { solverVerbosity = verbosity, scoring = scori
               | term lower current = do
                   case current of
                     Nothing -> return ()
-                    Just n  -> namedAssert slv "final-score-upper-bound" (SMT.leq scorevar (SMT.int n))
+                    Just b  -> namedAssert slv "final-score-upper-bound" (SMT.leq scorevar (SMT.int b))
                   SMT.check slv
               | otherwise = do
                   let middle = mid lower current
@@ -254,7 +254,7 @@ externalSMTResolver (SolverConfig { solverVerbosity = verbosity, scoring = scori
                           in  PreExisting $ InstalledPackage ipi deps
                         Right pid ->
                           let sp = fromJust $ CI.lookupPackageId sidx pid
-                              GenericPackageDescription pkg flags libs exes tests benchs = CT.packageDescription sp
+                              GenericPackageDescription _pkg flags libs exes tests benchs = CT.packageDescription sp
                               fa = postProcessFlags finalflagassignment pn flags
                               ss = M.findWithDefault [] pn gsa
                               conv :: CondTree ConfVar [Dependency] a -> [ConfiguredId]
@@ -275,6 +275,7 @@ externalSMTResolver (SolverConfig { solverVerbosity = verbosity, scoring = scori
             return (Fail (incompatiblePackages res))
           _   -> return (Fail (show r))
 
+testsEnabled, benchsEnabled :: [OptionalStanza] -> [a] -> [a]
 testsEnabled  ss xs = if TestStanzas  `elem` ss then xs else []
 benchsEnabled ss xs = if BenchStanzas `elem` ss then xs else []
 
@@ -413,9 +414,9 @@ closure idx = go S.empty
                                     )
 
 closure' :: Index PackageInfo -> SMT.Solver -> [PackageName] -> IO (Set PackageName)
-closure' idx slv pns = do
-    mapM_ (\ c -> SMT.declare slv (pkgVarName c) SMT.tInt) pns
-    go S.empty pns
+closure' idx slv pns0 = do
+    mapM_ (\ c -> SMT.declare slv (pkgVarName c) SMT.tInt) pns0
+    go S.empty pns0
   where
     go :: Set PackageName -> [PackageName] -> IO (Set PackageName)
     go visited []             = return visited
@@ -430,7 +431,7 @@ closure' idx slv pns = do
           mapM_ (\ c -> SMT.declare slv (pkgVarName c) SMT.tInt) newcandidates
           mapM_ (\ f -> SMT.declare slv (flagVarName (GlobalFlag pn f)) SMT.tBool) (piFlags pi)
           namedAssert slv (pkgCondName pn) (translate' pcond)
-          SMT.define  slv (scoreVarName pn) SMT.tInt pscore
+          _ <- SMT.define  slv (scoreVarName pn) SMT.tInt pscore
           go (S.insert pn visited) (pns ++ newcandidates)
 
 --------------------------------------------------------------------------
@@ -536,7 +537,7 @@ processIndexes :: Platform
 processIndexes platform cinfo gfa gsa iidx sidx = result
   where
     combine :: PackageInfo -> PackageInfo -> PackageInfo
-    combine (PackageInfo a1 f1 t1 flg1) (PackageInfo a2 _ t2 flg2) =
+    combine (PackageInfo a1 f1 t1 _flg1) (PackageInfo a2 _ t2 flg2) =
       PackageInfo (a1 ++ a2) f1 (M.union t1 t2) flg2 -- installed versions only to the left, flags only to the right
 
     result :: Index PackageInfo
@@ -598,7 +599,7 @@ mkSourcePackageInfo platform cinfo gfa gsa final = go . reverse -- reverse for a
     go []           = error "mkSourcePackageInfo: internal error, empty list"
     go ps @ (p : _) = (pkgName $ packageInfoId p, pi)
       where
-        assocs  = zipWith (\ sv p -> (sv, sourcePackage platform cinfo gfa gsa final (sourcePackageScore sv) p)) [1 ..] ps
+        assocs  = zipWith (\ sv p' -> (sv, sourcePackage platform cinfo gfa gsa final (sourcePackageScore sv) p')) [1 ..] ps
         assocs' = L.map (\ (s, i) -> (instVersion $ iiInstance i, s)) assocs
         flags   = nub $ L.concatMap (L.map flagName . genPackageFlags . CT.packageDescription) ps
         pi      = PackageInfo assocs' M.empty (M.fromList assocs) flags
