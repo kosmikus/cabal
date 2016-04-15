@@ -128,6 +128,7 @@ tests = [
         ]
     , testGroup "Independent goals" [
           runTest $ indep $ mkTest db16 "indepGoals" ["A", "B"] (Just [("A", 1), ("B", 1), ("C", 1), ("D", 1), ("D", 2), ("E", 1)])
+        , runTest $ indep $ mkTest db20 "indepGoals" ["D", "E", "F"] Nothing -- The target
         ]
     ]
   where
@@ -574,6 +575,41 @@ db18 = [
   , Right $ exAv "G" 1 []
   ]
 
+
+-- | Tricky test case with independent goals
+--
+-- Suppose we are installing D, E, and F as independent goals:
+--
+-- * D depends on A-* and C-1, requiring A-1 to be built against C-1
+-- * E depends on B-* and C-2, requiring B-1 to be built against C-2
+-- * F depends on A-* and B-*; this means we need A-1 and B-1 both to be built
+--     against the same version of C, violating the single instance restriction.
+--
+-- We can visualize this DB as:
+--
+-- >    C-1   C-2
+-- >    /|\   /|\
+-- >   / | \ / | \
+-- >  /  |  X  |  \
+-- > |   | / \ |   |
+-- > |   |/   \|   |
+-- > |   +     +   |
+-- > |   |     |   |
+-- > |   A     B   |
+-- >  \  |\   /|  /
+-- >   \ | \ / | /
+-- >    \|  V  |/
+-- >     D  F  E
+db20 :: ExampleDb
+db20 = [
+    Right $ exAv "A" 1 [ExAny "C"]
+  , Right $ exAv "B" 1 [ExAny "C"]
+  , Right $ exAv "C" 1 []
+  , Right $ exAv "C" 2 []
+  , Right $ exAv "D" 1 [ExAny "A", ExFix "C" 1]
+  , Right $ exAv "E" 1 [ExAny "B", ExFix "C" 2]
+  , Right $ exAv "F" 1 [ExAny "A", ExAny "B"]
+  ]
 
 dbExts1 :: ExampleDb
 dbExts1 = [
