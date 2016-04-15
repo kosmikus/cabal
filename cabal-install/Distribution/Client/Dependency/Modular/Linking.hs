@@ -262,7 +262,7 @@ makeCanonical lg qpn@(Q pp _) i =
     case lgCanon lg of
       -- There is already a canonical member. Fail.
       Just _ ->
-        conflict ( CS.insert (P qpn) (lgBlame lg)
+        conflict ( P qpn `CS.insert` lgConflictSet lg
                  ,    "cannot make " ++ showQPN qpn
                    ++ " canonical member of " ++ showLinkGroup lg
                  )
