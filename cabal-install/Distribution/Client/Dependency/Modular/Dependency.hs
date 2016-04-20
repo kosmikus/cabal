@@ -27,10 +27,11 @@ module Distribution.Client.Dependency.Modular.Dependency (
     -- * Goals
   , Goal(..)
   , GoalReason(..)
-  , QGoalReasonChain
+  , QGoalReason
   , ResetGoal(..)
   , toConflictSet
   , extendConflictSet
+  , goalReasonToVars
     -- * Open goals
   , OpenGoal(..)
   , close
@@ -326,24 +327,25 @@ type RevDepMap = Map QPN [(Component, QPN)]
   Goals
 -------------------------------------------------------------------------------}
 
--- | Goals are solver variables paired with information about
--- why they have been introduced.
-data Goal qpn = Goal (Var qpn) (GoalReasonChain qpn)
+-- | A goal is just a solver variable paired with a reason.
+-- The reason is only used for tracing.
+data Goal qpn = Goal (Var qpn) (GoalReason qpn)
   deriving (Eq, Show, Functor)
 
--- | Reasons why a goal can be added to a goal set.
+-- | Reasons why a goal is being added to a goal set.
+--
+-- Empty list means user goal.
+-- More than one element means that the combination of the goals is responsible.
+--
 data GoalReason qpn =
     UserGoal
+  | Unknown -- TODO: is this really needed?
   | PDependency (PI qpn)
   | FDependency (FN qpn) Bool
   | SDependency (SN qpn)
   deriving (Eq, Show, Functor)
 
--- | The first element is the immediate reason. The rest are the reasons
--- for the reasons ...
-type GoalReasonChain qpn = [GoalReason qpn]
-
-type QGoalReasonChain = GoalReasonChain QPN
+type QGoalReason = GoalReason QPN
 
 class ResetGoal f where
   resetGoal :: Goal qpn -> f qpn -> f qpn
@@ -361,23 +363,20 @@ instance ResetGoal Dep where
 instance ResetGoal Goal where
   resetGoal = const
 
--- | Compute a conflict set from a goal. The conflict set contains the closure
--- of goal reasons as well as the variable of the goal itself.
+-- | Compute a singleton conflict set from a goal, containing just
+-- the goal variable.
 toConflictSet :: Ord qpn => Goal qpn -> ConflictSet qpn
-toConflictSet (Goal g grs) = S.insert (simplifyVar g) (goalReasonChainToVars grs)
+toConflictSet (Goal g _gr) = S.singleton (simplifyVar g)
 
 -- | Add another variable into a conflict set
 extendConflictSet :: Ord qpn => Var qpn -> ConflictSet qpn -> ConflictSet qpn
 extendConflictSet = S.insert . simplifyVar
 
-goalReasonToVars :: GoalReason qpn -> ConflictSet qpn
+goalReasonToVars :: Ord qpn => GoalReason qpn -> ConflictSet qpn
 goalReasonToVars UserGoal                 = S.empty
 goalReasonToVars (PDependency (PI qpn _)) = S.singleton (P qpn)
 goalReasonToVars (FDependency qfn _)      = S.singleton (simplifyVar (F qfn))
 goalReasonToVars (SDependency qsn)        = S.singleton (S qsn)
-
-goalReasonChainToVars :: Ord qpn => GoalReasonChain qpn -> ConflictSet qpn
-goalReasonChainToVars = S.unions . L.map goalReasonToVars
 
 {-------------------------------------------------------------------------------
   Open goals
@@ -385,7 +384,7 @@ goalReasonChainToVars = S.unions . L.map goalReasonToVars
 
 -- | For open goals as they occur during the build phase, we need to store
 -- additional information about flags.
-data OpenGoal comp = OpenGoal (FlaggedDep comp QPN) QGoalReasonChain
+data OpenGoal comp = OpenGoal (FlaggedDep comp QPN) QGoalReason
   deriving (Eq, Show)
 
 -- | Closes a goal, i.e., removes all the extraneous information that we

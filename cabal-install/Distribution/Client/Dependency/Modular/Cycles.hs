@@ -25,11 +25,11 @@ import Distribution.Client.Dependency.Modular.Tree
 type DetectCycles = Reader (ConflictSet QPN)
 
 -- | Find and reject any solutions that are cyclic
-detectCyclesPhase :: Tree QGoalReasonChain -> Tree QGoalReasonChain
+detectCyclesPhase :: Tree QGoalReason -> Tree QGoalReason
 detectCyclesPhase = (`runReader` Set.empty) .  cata go
   where
     -- Most cases are simple; we just need to remember which choices we made
-    go :: TreeF QGoalReasonChain (DetectCycles (Tree QGoalReasonChain)) -> DetectCycles (Tree QGoalReasonChain)
+    go :: TreeF QGoalReason (DetectCycles (Tree QGoalReason)) -> DetectCycles (Tree QGoalReason)
     go (PChoiceF qpn gr     cs) = PChoice qpn gr     <$> local (extendConflictSet $ P qpn) (T.sequence cs)
     go (FChoiceF qfn gr w m cs) = FChoice qfn gr w m <$> local (extendConflictSet $ F qfn) (T.sequence cs)
     go (SChoiceF qsn gr w   cs) = SChoice qsn gr w   <$> local (extendConflictSet $ S qsn) (T.sequence cs)
