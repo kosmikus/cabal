@@ -82,7 +82,7 @@ solve sc cinfo idx pkgConfigDB userPrefs userConstraints userGoals =
     explorePhase     = backjumpAndExplore (enableBackjumping sc)
     heuristicsPhase  = (if asBool (preferEasyGoalChoices sc)
                          then P.preferEasyGoalChoices -- also leaves just one choice
-                         else P.firstGoal) . -- after doing goal-choice heuristics, commit to the first choice (saves space)
+                         else id {- P.firstGoal -}) . -- after doing goal-choice heuristics, commit to the first choice (saves space)
                        P.deferWeakFlagChoices .
                        P.deferSetupChoices .
                        P.preferBaseGoalChoice .
