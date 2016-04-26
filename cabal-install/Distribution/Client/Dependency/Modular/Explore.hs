@@ -4,6 +4,7 @@ module Distribution.Client.Dependency.Modular.Explore
     ) where
 
 import Data.Foldable as F
+import Data.List as L (foldl')
 import Data.Map as M
 
 import Distribution.Client.Dependency.Modular.Assignment
@@ -80,6 +81,12 @@ getBestGoal cm =
     . close
     )
 
+updateCM :: ConflictSet QPN -> ConflictMap -> ConflictMap
+updateCM cs cm = L.foldl' (\ cmc k -> M.alter inc k cmc) cm (CS.toList cs)
+  where
+    inc Nothing  = Just 0
+    inc (Just n) = Just (n + 1)
+
 -- | A tree traversal that simultaneously propagates conflict sets up
 -- the tree from the leaves and creates a log.
 exploreLog :: T.EnableBackjumping -> Tree QGoalReason
@@ -88,7 +95,7 @@ exploreLog enableBj = cata go
   where
     go :: TreeF QGoalReason (Assignment -> ConflictMap -> (ConflictSetLog (Assignment, RevDepMap), ConflictMap))
                          -> (Assignment -> ConflictMap -> (ConflictSetLog (Assignment, RevDepMap), ConflictMap))
-    go (FailF c fr)          _  cm       = (failWith (Failure c fr) c, cm)
+    go (FailF c fr)          _  cm       = (failWith (Failure c fr) c, updateCM c cm)
     go (DoneF rdm)           a  cm       = (succeedWith Success (a, rdm), cm)
     go (PChoiceF qpn gr     ts) (A pa fa sa) cm  =
       backjump enableBj (P qpn) (avoidSet (P qpn) gr) cm $ -- try children in order,
