@@ -16,6 +16,7 @@ import qualified Distribution.Client.Dependency.Modular.PSQ as P
 import qualified Distribution.Client.Dependency.Modular.ConflictSet as CS
 import Distribution.Client.Dependency.Modular.Tree
 import qualified Distribution.Client.Dependency.Types as T
+import Distribution.Client.Dependency.Modular.Var
 
 -- | This function takes the variable we're currently considering, an
 -- initial conflict set and a
@@ -59,12 +60,6 @@ backjump (T.EnableBackjumping enableBj) var initial cm xs =
            T.Step m ms ->
              let (l', cm'') = combine (\ x -> (ms, x)) f csAcc cm'
              in  (T.Step m l', cm'')
-{-
-    combine (T.Fail cs)   f csAcc
-      | enableBj && not (var `CS.member` cs) = logBackjump cs
-      | otherwise                = f (csAcc `CS.union` cs)
-    combine (T.Step m ms) f cs   = T.Step m (combine ms f cs)
--}
 
     logBackjump :: ConflictSet QPN -> ConflictMap -> (ConflictSetLog a, ConflictMap)
     logBackjump cs cm' = (failWith (Failure cs Backjump) cs, cm')
@@ -82,10 +77,11 @@ getBestGoal cm =
     )
 
 updateCM :: ConflictSet QPN -> ConflictMap -> ConflictMap
-updateCM cs cm = L.foldl' (\ cmc k -> M.alter inc k cmc) cm (CS.toList cs)
+updateCM cs cm =
+  L.foldl' (\ cmc k -> M.alter inc k cmc) cm (CS.toList cs)
   where
-    inc Nothing  = Just 0
-    inc (Just n) = Just (n + 1)
+    inc Nothing  = Just 1
+    inc (Just n) = Just $! n + 1
 
 -- | A tree traversal that simultaneously propagates conflict sets up
 -- the tree from the leaves and creates a log.

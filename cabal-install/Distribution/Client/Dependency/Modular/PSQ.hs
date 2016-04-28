@@ -127,7 +127,7 @@ dminimumBy sel (PSQ (x : xs)) = go (sel (snd x)) x xs
 
 maximumBy :: (k -> Int) -> PSQ k a -> (k, a)
 maximumBy sel (PSQ xs) =
-  S.maximumBy (comparing (sel . fst)) xs
+  S.minimumBy (flip (comparing (sel . fst))) xs
 
 minimumBy :: (a -> Int) -> PSQ k a -> PSQ k a
 minimumBy sel (PSQ xs) =
